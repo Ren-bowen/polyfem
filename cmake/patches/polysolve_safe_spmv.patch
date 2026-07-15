@@ -1,0 +1,73 @@
+diff --git a/src/polysolve/Utils.hpp b/src/polysolve/Utils.hpp
+index e6141a1a69bce9d69f312426c7c539bb91aa8c7c..4d1db4b0c0cb89e228ff33e18bb60d97686ec7c7 100644
+--- a/src/polysolve/Utils.hpp
++++ b/src/polysolve/Utils.hpp
+@@ -60,6 +60,18 @@ namespace polysolve
+ 
+     Eigen::SparseMatrix<double> sparse_identity(int rows, int cols);
+ 
++    inline Eigen::VectorXd safe_sparse_matrix_vector_product(
++        const StiffnessMatrix &matrix, const Eigen::VectorXd &vector)
++    {
++        Eigen::VectorXd result = Eigen::VectorXd::Zero(matrix.rows());
++        for (Eigen::Index col = 0; col < matrix.outerSize(); ++col)
++        {
++            for (StiffnessMatrix::InnerIterator it(matrix, col); it; ++it)
++                result(it.row()) += it.value() * vector(col);
++        }
++        return result;
++    }
++
+     double extract_param(const std::string &key, const std::string &name, const json &json);
+ 
+     namespace log
+diff --git a/src/polysolve/nonlinear/Solver.cpp b/src/polysolve/nonlinear/Solver.cpp
+index 72774f6a9771c8b686bbd041ff1a577d2e72a36c..269a15653c3ddb4e74d066eda22af191ae1564b3 100644
+--- a/src/polysolve/nonlinear/Solver.cpp
++++ b/src/polysolve/nonlinear/Solver.cpp
+@@ -336,6 +336,8 @@ namespace polysolve::nonlinear
+                 log_and_throw_error(m_logger, "[{}][{}] Gradient is nan; stopping", descent_strategy_name(), m_line_search->name());
+             }
+ 
++            const Criteria previous_criteria = m_current;
++
+             // Check convergence without these values to avoid impossible linear solves.
+             m_current.xDelta = NaN;
+             m_current.xDeltaDotGrad = NaN;
+@@ -343,7 +345,14 @@ namespace polysolve::nonlinear
+             m_current.newtonDecrement = NaN;
+             m_status = checkConvergence(m_stop_rescaled, m_current);
+             if (m_status != Status::Continue)
++            {
++                // Keep the last completed Newton-step diagnostics in the final log.
++                m_current.xDelta = std::isfinite(previous_criteria.xDelta) ? previous_criteria.xDelta : 0.0;
++                m_current.xDeltaDotGrad = std::isfinite(previous_criteria.xDeltaDotGrad) ? previous_criteria.xDeltaDotGrad : 0.0;
++                m_current.relXDelta = std::isfinite(previous_criteria.relXDelta) ? previous_criteria.relXDelta : 0.0;
++                m_current.newtonDecrement = std::isfinite(previous_criteria.newtonDecrement) ? previous_criteria.newtonDecrement : 0.0;
+                 break;
++            }
+ 
+             // --- Update direction --------------------------------------------
+ 
+@@ -393,7 +402,7 @@ namespace polysolve::nonlinear
+                 {
+                     THessian hessian;
+                     objFunc.hessian(x, hessian);
+-                    m_current.newtonDecrement = 0.5 * x.dot(hessian * x);
++                    m_current.newtonDecrement = 0.5 * delta_x.dot(safe_sparse_matrix_vector_product(hessian, delta_x));
+                 }
+                 catch (const std::runtime_error &e)
+                 {
+diff --git a/src/polysolve/nonlinear/descent_strategies/Newton.cpp b/src/polysolve/nonlinear/descent_strategies/Newton.cpp
+index ff8d015ac2c5bbfd00bf12ffa5777877ef08577a..8274986fb6ba9974fe929e0505c76a85b21d8437 100644
+--- a/src/polysolve/nonlinear/descent_strategies/Newton.cpp
++++ b/src/polysolve/nonlinear/descent_strategies/Newton.cpp
+@@ -204,7 +204,7 @@ namespace polysolve::nonlinear
+             linear_solver->solve(-grad, direction); // H Δx = -g
+         }
+ 
+-        const double residual = objFunc.grad_norm(hessian * direction + grad, norm_type); // H Δx + g = 0
++        const double residual = objFunc.grad_norm(safe_sparse_matrix_vector_product(hessian, direction) + grad, norm_type); // H Δx + g = 0
+ 
+         json info;
+         linear_solver->get_info(info);

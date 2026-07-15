@@ -5,6 +5,8 @@
 #include <polyfem/assembler/AssemblyValsCache.hpp>
 #include <polyfem/assembler/NeoHookeanElasticity.hpp>
 #include <polyfem/assembler/NeoHookeanElasticityAutodiff.hpp>
+#include <polyfem/assembler/StableNeoHookeanElasticity.hpp>
+#include <polyfem/assembler/AssemblerUtils.hpp>
 #include <polyfem/utils/RefElementSampler.hpp>
 #include <polyfem/varforms/VarForm.hpp>
 
@@ -13,6 +15,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 
 using namespace polyfem;
@@ -312,4 +316,165 @@ TEST_CASE("generic_elastic_assembler", "[assembler]")
 			}
 		}
 	}
+}
+
+TEST_CASE("stable_neo_hookean_nhk1_derivatives", "[assembler][stable_neo_hookean]")
+{
+	const double lambda = 7.3;
+	const double mu = 2.1;
+	const double length_rate = stable_nhk_length_rate(mu);
+	const double volume_rate = stable_nhk_volume_rate(lambda, mu);
+
+	// Use a nonsingular deformation so the finite-difference checks cover the
+	// volumetric and isochoric terms away from the reference configuration.
+	Eigen::Matrix3d F;
+	F << 1.1, 0.08, -0.03,
+		0.02, 0.93, 0.05,
+		-0.04, 0.06, 1.04;
+	REQUIRE(F.determinant() > 0.0);
+
+	const Eigen::Matrix3d identity = Eigen::Matrix3d::Identity();
+	const double rest_energy = 0.5 * length_rate * length_rate / volume_rate;
+	REQUIRE(stable_nhk_energy(identity, lambda, mu) == Catch::Approx(rest_energy).epsilon(1e-12));
+	REQUIRE(stable_nhk_stress(identity, lambda, mu).norm() == Catch::Approx(0.0).margin(1e-12));
+
+	REQUIRE(AssemblerUtils::is_elastic_material("StableNeoHookean"));
+	const auto registered = AssemblerUtils::make_assembler("StableNeoHookean");
+	REQUIRE(registered != nullptr);
+	REQUIRE(registered->name() == "StableNeoHookean");
+
+	const Eigen::Matrix3d stress = stable_nhk_stress(F, lambda, mu);
+	const double step = 1e-6;
+	for (int i = 0; i < 3; ++i)
+		for (int j = 0; j < 3; ++j)
+		{
+			Eigen::Matrix3d F_plus = F;
+			Eigen::Matrix3d F_minus = F;
+			F_plus(i, j) += step;
+			F_minus(i, j) -= step;
+			const double finite_energy_gradient =
+				(stable_nhk_energy(F_plus, lambda, mu) - stable_nhk_energy(F_minus, lambda, mu)) / (2.0 * step);
+			REQUIRE(stress(i, j) == Catch::Approx(finite_energy_gradient).epsilon(1e-7).margin(1e-9));
+		}
+
+	Eigen::Matrix<double, 9, 9> hessian;
+	for (int i = 0; i < 3; ++i)
+		for (int j = 0; j < 3; ++j)
+			for (int k = 0; k < 3; ++k)
+				for (int l = 0; l < 3; ++l)
+			{
+				Eigen::Matrix3d direction = Eigen::Matrix3d::Zero();
+				direction(k, l) = 1.0;
+				const Eigen::Matrix3d tangent = stable_nhk_stress_tangent(F, direction, lambda, mu);
+				hessian(i * 3 + j, k * 3 + l) = tangent(i, j);
+			}
+
+	REQUIRE((hessian - hessian.transpose()).norm() == Catch::Approx(0.0).margin(1e-10));
+	for (int k = 0; k < 3; ++k)
+		for (int l = 0; l < 3; ++l)
+		{
+			Eigen::Matrix3d F_plus = F;
+			Eigen::Matrix3d F_minus = F;
+			F_plus(k, l) += step;
+			F_minus(k, l) -= step;
+			const Eigen::Matrix3d finite_tangent =
+				(stable_nhk_stress(F_plus, lambda, mu) - stable_nhk_stress(F_minus, lambda, mu)) / (2.0 * step);
+			for (int i = 0; i < 3; ++i)
+				for (int j = 0; j < 3; ++j)
+					REQUIRE(hessian(i * 3 + j, k * 3 + l) ==
+						Catch::Approx(finite_tangent(i, j)).epsilon(1e-6).margin(1e-8));
+		}
+
+	const Eigen::Matrix3d expected_dmu =
+		(4.0 / 3.0) * F + ((5.0 / 6.0) * (F.determinant() - 1.0) - 4.0 / 3.0) * stable_nhk_cofactor(F);
+	const Eigen::Matrix3d expected_dlambda = (F.determinant() - 1.0) * stable_nhk_cofactor(F);
+	const double parameter_step = 1e-6;
+	const Eigen::Matrix3d finite_dmu =
+		(stable_nhk_stress(F, lambda, mu + parameter_step) - stable_nhk_stress(F, lambda, mu - parameter_step)) /
+		(2.0 * parameter_step);
+	const Eigen::Matrix3d finite_dlambda =
+		(stable_nhk_stress(F, lambda + parameter_step, mu) - stable_nhk_stress(F, lambda - parameter_step, mu)) /
+		(2.0 * parameter_step);
+	REQUIRE((expected_dmu - finite_dmu).norm() < 1e-8);
+	REQUIRE((expected_dlambda - finite_dlambda).norm() < 1e-8);
+}
+
+TEST_CASE("stable_neo_hookean_generic_assembly", "[assembler][stable_neo_hookean]")
+{
+	const std::string path = POLYFEM_DATA_DIR;
+	json in_args = json({});
+	in_args["geometry"] = {};
+	in_args["geometry"]["mesh"] = path + "/contact/meshes/3D/simple/bar/bar-6.msh";
+	in_args["materials"] = {
+		{"type", "StableNeoHookean"},
+		{"E", 2e4},
+		{"nu", 0.3}};
+
+	State state;
+	state.init_logger("", spdlog::level::err, spdlog::level::off, false);
+	state.init(in_args, true);
+	state.load_mesh();
+	test::VarFormTestAccess::prepare(*state.variational_formulation);
+
+	const test::VarFormDebugData debug = test::VarFormTestAccess::debug_data(*state.variational_formulation);
+	REQUIRE(debug.assembler != nullptr);
+	REQUIRE(debug.assembler->name() == "StableNeoHookean");
+	REQUIRE(debug.mesh != nullptr);
+	REQUIRE(debug.mesh->is_volume());
+
+	AssemblyValsCache ass_vals_cache;
+	ass_vals_cache.init_empty();
+	const int ndof = debug.n_bases * debug.mesh->dimension();
+	Eigen::MatrixXd displacement = Eigen::MatrixXd::Zero(ndof, 1);
+	Eigen::MatrixXd previous = displacement;
+
+	auto energy = [&](const Eigen::MatrixXd &x) {
+		return debug.assembler->assemble_energy(
+			true, *debug.bases, *debug.geometry_bases, ass_vals_cache, 0, 0, x, x);
+	};
+	auto gradient = [&](const Eigen::MatrixXd &x) {
+		Eigen::MatrixXd result;
+		debug.assembler->assemble_gradient(
+			true, debug.n_bases, *debug.bases, *debug.geometry_bases, ass_vals_cache, 0, 0, x, x, result);
+		return result;
+	};
+	auto hessian = [&](const Eigen::MatrixXd &x) {
+		utils::SparseMatrixCache mat_cache;
+		StiffnessMatrix result;
+		debug.assembler->assemble_hessian(
+			true, debug.n_bases, false, *debug.bases, *debug.geometry_bases,
+			ass_vals_cache, 0, 0, x, x, mat_cache, result);
+		return Eigen::MatrixXd(result);
+	};
+
+	const Eigen::MatrixXd rest_gradient = gradient(displacement);
+	REQUIRE(rest_gradient.norm() == Catch::Approx(0.0).margin(1e-10));
+
+	displacement.setRandom();
+	displacement /= 100.0;
+	const Eigen::MatrixXd analytic_gradient = gradient(displacement);
+	const double step = 1e-6;
+	Eigen::MatrixXd finite_gradient(ndof, 1);
+	for (int i = 0; i < ndof; ++i)
+	{
+		Eigen::MatrixXd plus = displacement;
+		Eigen::MatrixXd minus = displacement;
+		plus(i) += step;
+		minus(i) -= step;
+		finite_gradient(i) = (energy(plus) - energy(minus)) / (2.0 * step);
+	}
+	REQUIRE((analytic_gradient - finite_gradient).norm() < 1e-5);
+
+	const Eigen::MatrixXd analytic_hessian = hessian(displacement);
+	Eigen::MatrixXd finite_hessian(ndof, ndof);
+	for (int i = 0; i < ndof; ++i)
+	{
+		Eigen::MatrixXd plus = displacement;
+		Eigen::MatrixXd minus = displacement;
+		plus(i) += step;
+		minus(i) -= step;
+		finite_hessian.col(i) = (gradient(plus) - gradient(minus)) / (2.0 * step);
+	}
+	REQUIRE((analytic_hessian - analytic_hessian.transpose()).norm() < 1e-10);
+	REQUIRE((analytic_hessian - finite_hessian).norm() < 1e-4 * std::max(1.0, analytic_hessian.norm()));
 }

@@ -44,9 +44,33 @@ namespace polyfem::legacy
 	using namespace io;
 	using namespace utils;
 
+	namespace
+	{
+		json scaled_nonlinear_params_if_requested(
+			const json &params,
+			const json &advanced,
+			const double characteristic_length)
+		{
+			if (!advanced.value("scale_grad_norm_by_characteristic_length", false))
+				return params;
+
+			json scaled = params;
+			for (const std::string key : {"grad_norm", "grad_norm_tol"})
+			{
+				if (scaled.contains(key) && scaled[key].is_number())
+					scaled[key] = scaled[key].get<double>() * characteristic_length;
+			}
+			return scaled;
+		}
+	} // namespace
+
 	std::shared_ptr<polysolve::nonlinear::Solver> State::make_nl_solver(bool for_al) const
 	{
-		return polysolve::nonlinear::Solver::create(for_al ? args["solver"]["augmented_lagrangian"]["nonlinear"] : args["solver"]["nonlinear"], args["solver"]["linear"], units.characteristic_length(), logger());
+		const json params = scaled_nonlinear_params_if_requested(
+			for_al ? args["solver"]["augmented_lagrangian"]["nonlinear"] : args["solver"]["nonlinear"],
+			args["solver"]["advanced"],
+			units.characteristic_length());
+		return polysolve::nonlinear::Solver::create(params, args["solver"]["linear"], units.characteristic_length(), logger());
 	}
 
 	void State::solve_transient_tensor_nonlinear(const int time_steps,
@@ -393,11 +417,20 @@ namespace polyfem::legacy
 		};
 
 		Eigen::MatrixXd prev_sol = sol;
+		const json al_nonlinear_params = scaled_nonlinear_params_if_requested(
+			args["solver"]["augmented_lagrangian"]["nonlinear"],
+			args["solver"]["advanced"],
+			units.characteristic_length());
+		const json nonlinear_params = scaled_nonlinear_params_if_requested(
+			args["solver"]["nonlinear"],
+			args["solver"]["advanced"],
+			units.characteristic_length());
+
 		al_solver.solve_al(nl_problem, sol,
-						   args["solver"]["augmented_lagrangian"]["nonlinear"], args["solver"]["linear"], units.characteristic_length());
+						   al_nonlinear_params, args["solver"]["linear"], units.characteristic_length());
 
 		al_solver.solve_reduced(nl_problem, sol,
-								args["solver"]["nonlinear"], args["solver"]["linear"], units.characteristic_length());
+								nonlinear_params, args["solver"]["linear"], units.characteristic_length());
 
 		if (args["space"]["advanced"]["count_flipped_els_continuous"])
 		{

@@ -1707,9 +1707,16 @@
             "check_inversion",
             "jacobian_threshold",
             "characteristic_length",
-            "characteristic_force_density"
+            "characteristic_force_density",
+            "scale_grad_norm_by_characteristic_length"
         ],
         "doc": "Advanced settings for the solver"
+    },
+    {
+        "pointer": "/solver/advanced/scale_grad_norm_by_characteristic_length",
+        "default": false,
+        "type": "bool",
+        "doc": "Scale nonlinear grad_norm tolerances by the solver characteristic length."
     },
     {
         "pointer": "/solver/advanced/characteristic_length",

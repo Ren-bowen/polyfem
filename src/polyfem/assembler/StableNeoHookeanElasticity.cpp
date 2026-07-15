@@ -1,0 +1,61 @@
+#include "StableNeoHookeanElasticity.hpp"
+
+namespace polyfem::assembler
+{
+	void StableNeoHookeanElasticity::add_multimaterial(const int index, const json &params, const Units &units, const std::string &root_path)
+	{
+		if (size() != 3)
+			log_and_throw_error("StableNeoHookean is only implemented for 3D volume meshes.");
+
+		params_.add_multimaterial(index, params, true, units.stress(), root_path);
+	}
+
+	void StableNeoHookeanElasticity::compute_dstress_dmu_dlambda(
+		const OptAssemblerData &data,
+		Eigen::MatrixXd &dstress_dmu,
+		Eigen::MatrixXd &dstress_dlambda) const
+	{
+		double lambda, mu;
+		params_.lambda_mu(data.local_pts, data.global_pts, data.t, data.el_id, lambda, mu);
+
+		const Eigen::MatrixXd F = Eigen::MatrixXd::Identity(3, 3) + data.grad_u_i;
+		const Eigen::MatrixXd C = stable_nhk_cofactor(F);
+		const double J = F.determinant();
+
+		dstress_dmu = (4.0 / 3.0) * F +
+			((5.0 / 6.0) * (J - 1.0) - 4.0 / 3.0) * C;
+		dstress_dlambda = (J - 1.0) * C;
+	}
+
+	std::map<std::string, Assembler::ParamFunc> StableNeoHookeanElasticity::parameters() const
+	{
+		std::map<std::string, ParamFunc> res;
+		const auto &params = params_;
+
+		res["lambda"] = [&params](const RowVectorNd &uv, const RowVectorNd &p, double t, int e) {
+			double lambda, mu;
+			params.lambda_mu(uv, p, t, e, lambda, mu);
+			return lambda;
+		};
+
+		res["mu"] = [&params](const RowVectorNd &uv, const RowVectorNd &p, double t, int e) {
+			double lambda, mu;
+			params.lambda_mu(uv, p, t, e, lambda, mu);
+			return mu;
+		};
+
+		res["E"] = [&params](const RowVectorNd &uv, const RowVectorNd &p, double t, int e) {
+			double lambda, mu;
+			params.lambda_mu(uv, p, t, e, lambda, mu);
+			return mu * (3.0 * lambda + 2.0 * mu) / (lambda + mu);
+		};
+
+		res["nu"] = [&params](const RowVectorNd &uv, const RowVectorNd &p, double t, int e) {
+			double lambda, mu;
+			params.lambda_mu(uv, p, t, e, lambda, mu);
+			return lambda / (2.0 * (lambda + mu));
+		};
+
+		return res;
+	}
+} // namespace polyfem::assembler

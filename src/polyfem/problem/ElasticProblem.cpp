@@ -2,6 +2,8 @@
 
 #include <iostream>
 
+#include <polyfem/assembler/StableNeoHookeanElasticity.hpp>
+
 using namespace Eigen;
 
 namespace polyfem
@@ -781,6 +783,11 @@ namespace polyfem
 					Eigen::MatrixXd def_grad = Eigen::MatrixXd::Identity(grad_u.rows(), grad_u.cols()) + grad_u;
 					Eigen::MatrixXd FmT = def_grad.inverse().transpose();
 					sigma = mu * (def_grad - FmT) + lambda * std::log(def_grad.determinant()) * FmT;
+				}
+				else if (formulation == "StableNeoHookean")
+				{
+					const Eigen::MatrixXd def_grad = Eigen::MatrixXd::Identity(grad_u.rows(), grad_u.cols()) + grad_u;
+					sigma = assembler::stable_nhk_stress(def_grad, lambda, mu);
 				}
 				else
 				{

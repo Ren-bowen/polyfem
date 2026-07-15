@@ -38,11 +38,32 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <string>
 
 namespace polyfem::varform
 {
 	using namespace solver;
 	using namespace time_integrator;
+
+	namespace
+	{
+		json scaled_nonlinear_params_if_requested(
+			const json &params,
+			const json &advanced,
+			const double characteristic_length)
+		{
+			if (!advanced.value("scale_grad_norm_by_characteristic_length", false))
+				return params;
+
+			json scaled = params;
+			for (const std::string key : {"grad_norm", "grad_norm_tol"})
+			{
+				if (scaled.contains(key) && scaled[key].is_number())
+					scaled[key] = scaled[key].get<double>() * characteristic_length;
+			}
+			return scaled;
+		}
+	} // namespace
 
 	void NonlinearElasticVarForm::init(const std::string &formulation, const Units &units, const json &args, const std::string &out_path)
 	{
@@ -769,8 +790,17 @@ namespace polyfem::varform
 
 		save_subsolve(0, step, sol);
 
+		const json al_nonlinear_params = scaled_nonlinear_params_if_requested(
+			args["solver"]["augmented_lagrangian"]["nonlinear"],
+			args["solver"]["advanced"],
+			units.characteristic_length());
+		const json nonlinear_params = scaled_nonlinear_params_if_requested(
+			args["solver"]["nonlinear"],
+			args["solver"]["advanced"],
+			units.characteristic_length());
+
 		std::shared_ptr<polysolve::nonlinear::Solver> nl_solver =
-			polysolve::nonlinear::Solver::create(args["solver"]["augmented_lagrangian"]["nonlinear"], args["solver"]["linear"], units.characteristic_length(), logger());
+			polysolve::nonlinear::Solver::create(al_nonlinear_params, args["solver"]["linear"], units.characteristic_length(), logger());
 
 		ALSolver al_solver(
 			solve_data.al_form,
@@ -794,10 +824,10 @@ namespace polyfem::varform
 
 		Eigen::MatrixXd prev_sol = sol;
 		al_solver.solve_al(nl_problem, sol,
-						   args["solver"]["augmented_lagrangian"]["nonlinear"], args["solver"]["linear"], units.characteristic_length());
+						   al_nonlinear_params, args["solver"]["linear"], units.characteristic_length());
 
 		al_solver.solve_reduced(nl_problem, sol,
-								args["solver"]["nonlinear"], args["solver"]["linear"], units.characteristic_length());
+								nonlinear_params, args["solver"]["linear"], units.characteristic_length());
 
 		if (args["space"]["advanced"]["count_flipped_els_continuous"])
 		{

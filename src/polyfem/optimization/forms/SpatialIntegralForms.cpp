@@ -6,6 +6,7 @@
 #include <polyfem/utils/IntegrableFunctional.hpp>
 #include <polyfem/utils/Logger.hpp>
 #include <polyfem/assembler/Mass.hpp>
+#include <polyfem/assembler/StableNeoHookeanElasticity.hpp>
 #include <polyfem/solver/NLProblem.hpp>
 #include <polyfem/solver/NLHomoProblem.hpp>
 #include <polyfem/optimization/DiffCache.hpp>
@@ -28,6 +29,11 @@ namespace polyfem::solver
 		}
 
 		double dot(const Eigen::MatrixXd &A, const Eigen::MatrixXd &B) { return (A.array() * B.array()).sum(); }
+
+		bool is_stable_nhk(const std::string &formulation)
+		{
+			return formulation == "StableNeoHookean";
+		}
 
 		Eigen::VectorXd reduced_to_full_shape_derivative(
 			const StiffnessMatrix &basis_nodes_to_gbasis_nodes,
@@ -148,6 +154,11 @@ namespace polyfem::solver
 					double log_det_j = log(def_grad.determinant());
 					val(q) = mu(q) / 2 * ((def_grad.transpose() * def_grad).trace() - dim - 2 * log_det_j) + lambda(q) / 2 * log_det_j * log_det_j;
 				}
+				else if (is_stable_nhk(formulation))
+				{
+					const Eigen::MatrixXd def_grad = grad_u_q + Eigen::MatrixXd::Identity(dim, dim);
+					val(q) = assembler::stable_nhk_energy(def_grad, lambda(q), mu(q));
+				}
 				else
 					log_and_throw_adjoint_error("[{}] Unknown formulation {}!", name(), formulation);
 			}
@@ -168,6 +179,11 @@ namespace polyfem::solver
 					def_grad = Eigen::MatrixXd::Identity(grad_u_q.rows(), grad_u_q.cols()) + grad_u_q;
 					FmT = def_grad.inverse().transpose();
 					stress = mu(q) * (def_grad - FmT) + lambda(q) * std::log(def_grad.determinant()) * FmT;
+				}
+				else if (is_stable_nhk(formulation))
+				{
+					def_grad = Eigen::MatrixXd::Identity(grad_u_q.rows(), grad_u_q.cols()) + grad_u_q;
+					stress = assembler::stable_nhk_stress(def_grad, lambda(q), mu(q));
 				}
 				else
 					log_and_throw_adjoint_error("[{}] Unknown formulation {}!", name(), formulation);
@@ -493,6 +509,11 @@ namespace polyfem::solver
 					Eigen::MatrixXd FmT = def_grad.inverse().transpose();
 					stress = mu(q) * (def_grad - FmT) + lambda(q) * std::log(def_grad.determinant()) * FmT;
 				}
+				else if (is_stable_nhk(formulation))
+				{
+					const Eigen::MatrixXd def_grad = Eigen::MatrixXd::Identity(grad_u_q.rows(), grad_u_q.cols()) + grad_u_q;
+					stress = assembler::stable_nhk_stress(def_grad, lambda(q), mu(q));
+				}
 				else
 					log_and_throw_adjoint_error("[{}] Unknown formulation {}!", name(), formulation);
 				val(q) = stress(dimensions[0], dimensions[1]);
@@ -536,6 +557,20 @@ namespace polyfem::solver
 									stiffness(idx++) = mu(q) * delta(i, k) * delta(j, l) + tmp1 * FmT(i, l) * FmT(k, j);
 								}
 					stiffness += lambda(q) * utils::flatten(FmT_vec * FmT_vec.transpose()).transpose();
+				}
+				else if (is_stable_nhk(formulation))
+				{
+					const Eigen::MatrixXd def_grad = Eigen::MatrixXd::Identity(dim, dim) + grad_u_q;
+					stress = assembler::stable_nhk_stress(def_grad, lambda(q), mu(q));
+					for (int i = 0, idx = 0; i < dim; ++i)
+						for (int j = 0; j < dim; ++j)
+							for (int k = 0; k < dim; ++k)
+								for (int l = 0; l < dim; ++l)
+								{
+									Eigen::MatrixXd dF = Eigen::MatrixXd::Zero(dim, dim);
+									dF(k, l) = 1.0;
+									stiffness(idx++) = assembler::stable_nhk_stress_tangent(def_grad, dF, lambda(q), mu(q))(i, j);
+								}
 				}
 				else
 					log_and_throw_adjoint_error("[{}] Unknown formulation {}!", name(), formulation);
