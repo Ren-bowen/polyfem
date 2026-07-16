@@ -466,6 +466,53 @@ TEST_CASE("material-transient", "[opt_gradient]")
 	run_test1("material-transient-opt.json", 1e-5, TOL, 1e3, 1e3, SEED, REPEAT);
 }
 
+TEST_CASE("stable-neohookean-material-static", "[opt_gradient][stable_neo_hookean]")
+{
+	json state_args = {
+		{"geometry", {{{"mesh", std::string(POLYFEM_DIFF_DIR) + "/cube.msh"},
+						{"volume_selection", 1},
+						{"surface_selection", {{{"id", 11}, {"axis", "-x"}, {"position", 0.001}}}},
+						{"transformation", {{"translation", {0.5, 0.5, 0.5}}}},
+						{"n_refs", 0}}}},
+		{"space", {{"discr_order", 1}, {"advanced", {{"quadrature_order", 5}}}}},
+		{"materials", {{"type", "StableNeoHookean"}, {"lambda", std::exp(10.0)}, {"mu", std::exp(10.0)}}},
+		{"boundary_conditions", {
+			{"rhs", {0, 10, 20}},
+			{"dirichlet_boundary", {{{"id", 11}, {"value", {0, 0, 0}}}}}}},
+		{"solver", {
+			{"linear", {{"solver", {"Eigen::PardisoLDLT", "Eigen::SimplicialLDLT"}}}},
+			{"nonlinear", {{"solver", "Newton"}, {"norm_type", "Euclidean"},
+				{"max_iterations", 100}, {"grad_norm_tol", 1e-10},
+				{"rel_grad_norm_tol", 0}, {"first_grad_norm_tol", 0}}},
+			{"advanced", {{"characteristic_force_density", 1}, {"characteristic_length", 1}}}}}};
+	auto state = from_json::build_state(state_args, 1);
+	std::vector<std::shared_ptr<legacy::State>> states = {state};
+	std::vector<std::shared_ptr<DiffCache>> diff_caches = {std::make_shared<DiffCache>()};
+	json variable_args = {
+		{"type", "elastic"}, {"state", 0},
+		{"composition", {{{"type", "exp"}}, {{"type", "per-body-to-per-elem"}, {"state", 0}}}}};
+	VariableToSimulationGroup var2sim = from_json::build_variable_to_simulation_group(
+		json::array({variable_args}), states, diff_caches, {2});
+	json form_args = {{"type", "position"}, {"state", 0}, {"dim", 1}, {"volume_selection", json::array()}};
+	auto form = from_json::build_form(form_args, var2sim, states, diff_caches);
+	json opt_args = AdjointOptUtils::apply_opt_json_spec(json::object(), false);
+	opt_args["output"]["save_frequency"] = 100000;
+	opt_args["solver"]["advanced"]["solve_in_parallel"] = false;
+	AdjointNLProblem problem{form, var2sim, states, diff_caches, opt_args};
+
+	Eigen::VectorXd x = var2sim.data[0]->inverse_eval();
+	REQUIRE(x.size() == 2);
+
+	const std::array<Eigen::Vector2d, 3> directions = {{
+		Eigen::Vector2d::UnitX(),
+		Eigen::Vector2d::UnitY(),
+		Eigen::Vector2d(1.0, -1.0).normalized()}};
+	for (int i = 0; i < int(directions.size()); ++i)
+		verify_adjoint(
+			problem, x, directions[i], 1e-4, 1e-4,
+			"stable-neohookean-material-static", i, BASE_SEED + 32);
+}
+
 TEST_CASE("shape-transient-friction", "[opt_gradient]")
 {
 	constexpr uint64_t SEED = BASE_SEED + 15;

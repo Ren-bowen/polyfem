@@ -191,7 +191,9 @@ namespace polyfem::solver
 
 	double AdjointNLProblem::value(const Eigen::VectorXd &x)
 	{
-		return form_->value(x);
+		const double value = form_->value(x);
+		adjoint_logger().trace("objective {:.17g}", value);
+		return value;
 	}
 
 	void AdjointNLProblem::gradient(const Eigen::VectorXd &x, Eigen::VectorXd &gradv)
