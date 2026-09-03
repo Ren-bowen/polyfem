@@ -7,6 +7,7 @@
 
 #include <igl/edges.h>
 #include <igl/boundary_loop.h>
+#include <igl/default_num_threads.h>
 #include <igl/doublearea.h>
 #include <igl/upsample.h>
 

@@ -192,6 +192,10 @@ namespace polyfem::from_json
 		{
 			map = std::make_shared<ENu2LambdaMu>(args["is_volume"]);
 		}
+		else if (type == "stable-nh-v1-to-legacy")
+		{
+			map = std::make_shared<StableNHV1ToLegacy>();
+		}
 		else if (type == "slice")
 		{
 			if (args["from"] != -1 || args["to"] != -1)

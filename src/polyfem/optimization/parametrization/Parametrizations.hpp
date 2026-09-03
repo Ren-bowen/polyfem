@@ -77,6 +77,23 @@ namespace polyfem::solver
 		const bool is_volume_;
 	};
 
+	/// Map Unified GIPC Stable-NH v1 Lamé parameters to the equivalent
+	/// parameters consumed by PolyFEM's legacy StableNeoHookean model.
+	///
+	/// Unified v1 uses length_rate=mu and volume_rate=lambda+mu, while the
+	/// legacy model uses length_rate=4*mu/3 and
+	/// volume_rate=lambda+5*mu/6+1e-4. Inputs and outputs use the usual
+	/// dimension-major [lambda..., mu...] layout.
+	class StableNHV1ToLegacy : public Parametrization
+	{
+	public:
+		int inverse_size(int y_size) const override;
+		int size(const int x_size) const override;
+		Eigen::VectorXd inverse_eval(const Eigen::VectorXd &y) const override;
+		Eigen::VectorXd eval(const Eigen::VectorXd &x) const override;
+		Eigen::VectorXd apply_jacobian(const Eigen::VectorXd &grad, const Eigen::VectorXd &x) const override;
+	};
+
 	/// @brief Map per body to per FE node in node major layout (x1 y1 z1 x2 y2 z2...)
 	///
 	/// The order of the input body is pseudo randomly determined by the element order of input mesh,

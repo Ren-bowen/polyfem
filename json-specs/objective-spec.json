@@ -235,7 +235,9 @@
             "weight",
             "print_energy",
             "volume_selection",
-            "target_state"
+            "target_state",
+            "active_dimension",
+            "normalize"
         ],
         "doc": "TODO"
     },
@@ -383,6 +385,12 @@
         "pointer": "/active_dimension/*",
         "type": "bool",
         "doc": "TODO"
+    },
+    {
+        "pointer": "/normalize",
+        "type": "bool",
+        "default": false,
+        "doc": "Normalize position integrals by selected volume to compare true barycenters."
     },
     {
         "pointer": "/control_points",

@@ -263,6 +263,65 @@ namespace polyfem::solver
 		return grad_E_nu;
 	}
 
+	int StableNHV1ToLegacy::inverse_size(const int y_size) const
+	{
+		check_non_empty(y_size, "StableNHV1ToLegacy::inverse_size");
+		if (y_size % 2 != 0)
+			log_and_throw_adjoint_error(
+				"Invalid stable-nh-v1-to-legacy composition. Expected an even output DOF but got {}. {}",
+				y_size, ERR_STRING);
+		return y_size;
+	}
+
+	int StableNHV1ToLegacy::size(const int x_size) const
+	{
+		check_non_empty(x_size, "StableNHV1ToLegacy::size");
+		if (x_size % 2 != 0)
+			log_and_throw_adjoint_error(
+				"Invalid stable-nh-v1-to-legacy composition. Expected an even input DOF but got {}. {}",
+				x_size, ERR_STRING);
+		return x_size;
+	}
+
+	Eigen::VectorXd StableNHV1ToLegacy::inverse_eval(const Eigen::VectorXd &y) const
+	{
+		const int n = y.size() / 2;
+		if (n * 2 != y.size())
+			log_and_throw_adjoint_error("stable-nh-v1-to-legacy requires paired lambda/mu values.");
+
+		Eigen::VectorXd x(y.size());
+		x.head(n) = y.head(n) - 0.5 * y.tail(n).array().matrix();
+		x.head(n).array() += 1e-4;
+		x.tail(n) = (4.0 / 3.0) * y.tail(n);
+		return x;
+	}
+
+	Eigen::VectorXd StableNHV1ToLegacy::eval(const Eigen::VectorXd &x) const
+	{
+		const int n = x.size() / 2;
+		if (n * 2 != x.size())
+			log_and_throw_adjoint_error("stable-nh-v1-to-legacy requires paired lambda/mu values.");
+
+		Eigen::VectorXd y(x.size());
+		y.head(n) = x.head(n) + (3.0 / 8.0) * x.tail(n).array().matrix();
+		y.head(n).array() -= 1e-4;
+		y.tail(n) = (3.0 / 4.0) * x.tail(n);
+		return y;
+	}
+
+	Eigen::VectorXd StableNHV1ToLegacy::apply_jacobian(
+		const Eigen::VectorXd &grad, const Eigen::VectorXd &x) const
+	{
+		const int n = x.size() / 2;
+		if (n * 2 != x.size() || grad.size() != x.size())
+			log_and_throw_adjoint_error("stable-nh-v1-to-legacy requires paired lambda/mu values.");
+
+		Eigen::VectorXd result(x.size());
+		result.head(n) = grad.head(n);
+		result.tail(n) = (3.0 / 8.0) * grad.head(n) + (3.0 / 4.0) * grad.tail(n);
+		return result;
+	}
+
 	PerBody2PerNode::PerBody2PerNode(const mesh::Mesh &mesh, const std::vector<basis::ElementBases> &bases, const int n_bases) : mesh_(mesh), bases_(bases), full_size_(n_bases)
 	{
 		reduced_size_ = 0;

@@ -364,6 +364,7 @@
             "per-body-to-per-elem",
             "per-body-to-per-node",
             "E-nu-to-lambda-mu",
+            "stable-nh-v1-to-legacy",
             "slice",
             "exp",
             "scale",
@@ -374,6 +375,15 @@
             "bounded-biharmonic-weights",
             "scalar-velocity-parametrization"
         ]
+    },
+    {
+        "pointer": "/variable_to_simulation/*/composition/*",
+        "type_name": "stable-nh-v1-to-legacy",
+        "type": "object",
+        "required": [
+            "type"
+        ],
+        "doc": "Map Unified GIPC Stable-NH v1 Lamé parameters to equivalent legacy PolyFEM StableNeoHookean parameters"
     },
     {
         "pointer": "/variable_to_simulation/*/composition/*",

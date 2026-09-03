@@ -101,7 +101,12 @@ namespace polyfem
 
 				if (!m_name.empty())
 				{
-					logger().trace(log_fmt_text, m_name, getElapsedTimeInSec());
+					// Keep the adjoint phase timers visible in Python bindings whose
+					// compile-time spdlog level removes trace calls.
+					if (m_name == "backward hessian assembly" || m_name == "backward linear solver")
+						logger().info(log_fmt_text, m_name, getElapsedTimeInSec());
+					else
+						logger().trace(log_fmt_text, m_name, getElapsedTimeInSec());
 				}
 			}
 

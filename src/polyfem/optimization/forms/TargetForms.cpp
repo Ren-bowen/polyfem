@@ -585,6 +585,21 @@ namespace polyfem::solver
 		: StaticForm(variable_to_simulations)
 	{
 		dim = state1->mesh->dimension();
+		if (state2->mesh->dimension() != dim)
+			log_and_throw_adjoint_error("[center-target] State dimensions do not match!");
+
+		normalize = args.value("normalize", false);
+		active_dimension_mask.assign(dim, true);
+		if (args.contains("active_dimension") && !args["active_dimension"].empty())
+		{
+			if (args["active_dimension"].size() != dim)
+				log_and_throw_adjoint_error("[center-target] Active dimension shape must match the simulation dimension!");
+			for (int d = 0; d < dim; ++d)
+				active_dimension_mask[d] = args["active_dimension"][d].get<bool>();
+		}
+		if (std::none_of(active_dimension_mask.begin(), active_dimension_mask.end(), [](const bool active) { return active; }))
+			log_and_throw_adjoint_error("[center-target] At least one dimension must be active!");
+
 		json tmp_args = args;
 		for (int d = 0; d < dim; d++)
 		{
@@ -592,28 +607,68 @@ namespace polyfem::solver
 			center1.push_back(std::make_unique<PositionForm>(variable_to_simulations, state1, diff_cache1, tmp_args));
 			center2.push_back(std::make_unique<PositionForm>(variable_to_simulations, state2, diff_cache2, tmp_args));
 		}
+		if (normalize)
+		{
+			volume1 = std::make_unique<VolumeForm>(variable_to_simulations, state1, diff_cache1, args);
+			volume2 = std::make_unique<VolumeForm>(variable_to_simulations, state2, diff_cache2, args);
+		}
 	}
 
 	Eigen::VectorXd BarycenterTargetForm::compute_adjoint_rhs_step(const int time_step, const Eigen::VectorXd &x, const legacy::State &state, const DiffCache &diff_cache) const
 	{
 		Eigen::VectorXd term;
 		term.setZero(state.ndof());
+		const double vol1 = normalize ? volume1->value_unweighted_step(time_step, x) : 1.0;
+		const double vol2 = normalize ? volume2->value_unweighted_step(time_step, x) : 1.0;
+		if (!std::isfinite(vol1) || !std::isfinite(vol2) || vol1 <= 0 || vol2 <= 0)
+			log_and_throw_adjoint_error("[center-target] Cannot normalize by non-positive volume ({}, {})!", vol1, vol2);
 		for (int d = 0; d < dim; d++)
 		{
-			double value = center1[d]->value_unweighted_step(time_step, x) - center2[d]->value_unweighted_step(time_step, x);
-			term += (2 * value) * (center1[d]->compute_adjoint_rhs_step(time_step, x, state, diff_cache) - center2[d]->compute_adjoint_rhs_step(time_step, x, state, diff_cache));
+			if (!active_dimension_mask[d])
+				continue;
+			const double pos1 = center1[d]->value_unweighted_step(time_step, x);
+			const double pos2 = center2[d]->value_unweighted_step(time_step, x);
+			const double value = pos1 / vol1 - pos2 / vol2;
+			Eigen::VectorXd grad1 = center1[d]->compute_adjoint_rhs_step(time_step, x, state, diff_cache) / vol1;
+			Eigen::VectorXd grad2 = center2[d]->compute_adjoint_rhs_step(time_step, x, state, diff_cache) / vol2;
+			if (normalize)
+			{
+				grad1 -= pos1 * volume1->compute_adjoint_rhs_step(time_step, x, state, diff_cache) / (vol1 * vol1);
+				grad2 -= pos2 * volume2->compute_adjoint_rhs_step(time_step, x, state, diff_cache) / (vol2 * vol2);
+			}
+			term += (2 * value) * (grad1 - grad2);
 		}
 		return term * weight();
 	}
 	void BarycenterTargetForm::compute_partial_gradient_step(const int time_step, const Eigen::VectorXd &x, Eigen::VectorXd &gradv) const
 	{
 		gradv.setZero(x.size());
-		Eigen::VectorXd tmp1, tmp2;
+		Eigen::VectorXd tmp1, tmp2, volume_grad1, volume_grad2;
+		const double vol1 = normalize ? volume1->value_unweighted_step(time_step, x) : 1.0;
+		const double vol2 = normalize ? volume2->value_unweighted_step(time_step, x) : 1.0;
+		if (!std::isfinite(vol1) || !std::isfinite(vol2) || vol1 <= 0 || vol2 <= 0)
+			log_and_throw_adjoint_error("[center-target] Cannot normalize by non-positive volume ({}, {})!", vol1, vol2);
+		if (normalize)
+		{
+			volume1->compute_partial_gradient_step(time_step, x, volume_grad1);
+			volume2->compute_partial_gradient_step(time_step, x, volume_grad2);
+		}
 		for (int d = 0; d < dim; d++)
 		{
-			double value = center1[d]->value_unweighted_step(time_step, x) - center2[d]->value_unweighted_step(time_step, x);
+			if (!active_dimension_mask[d])
+				continue;
+			const double pos1 = center1[d]->value_unweighted_step(time_step, x);
+			const double pos2 = center2[d]->value_unweighted_step(time_step, x);
+			const double value = pos1 / vol1 - pos2 / vol2;
 			center1[d]->compute_partial_gradient_step(time_step, x, tmp1);
 			center2[d]->compute_partial_gradient_step(time_step, x, tmp2);
+			tmp1 /= vol1;
+			tmp2 /= vol2;
+			if (normalize)
+			{
+				tmp1 -= pos1 * volume_grad1 / (vol1 * vol1);
+				tmp2 -= pos2 * volume_grad2 / (vol2 * vol2);
+			}
 			gradv += (2 * value) * (tmp1 - tmp2);
 		}
 		gradv *= weight();
@@ -621,8 +676,16 @@ namespace polyfem::solver
 	double BarycenterTargetForm::value_unweighted_step(const int time_step, const Eigen::VectorXd &x) const
 	{
 		double dist = 0;
+		const double vol1 = normalize ? volume1->value_unweighted_step(time_step, x) : 1.0;
+		const double vol2 = normalize ? volume2->value_unweighted_step(time_step, x) : 1.0;
+		if (!std::isfinite(vol1) || !std::isfinite(vol2) || vol1 <= 0 || vol2 <= 0)
+			log_and_throw_adjoint_error("[center-target] Cannot normalize by non-positive volume ({}, {})!", vol1, vol2);
 		for (int d = 0; d < dim; d++)
-			dist += std::pow(center1[d]->value_unweighted_step(time_step, x) - center2[d]->value_unweighted_step(time_step, x), 2);
+		{
+			if (!active_dimension_mask[d])
+				continue;
+			dist += std::pow(center1[d]->value_unweighted_step(time_step, x) / vol1 - center2[d]->value_unweighted_step(time_step, x) / vol2, 2);
+		}
 
 		return dist;
 	}

@@ -151,6 +151,9 @@ namespace polyfem::solver
 
 	private:
 		std::vector<std::unique_ptr<PositionForm>> center1, center2;
+		std::unique_ptr<VolumeForm> volume1, volume2;
+		std::vector<bool> active_dimension_mask;
+		bool normalize = false;
 		int dim;
 	};
 

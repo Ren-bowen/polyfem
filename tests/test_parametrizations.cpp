@@ -67,4 +67,19 @@ TEST_CASE("bbw-test", "[parametrization]")
 	verify_apply_jacobian(lbs_with_bbw, y);
 }
 
+TEST_CASE("stable-nh-v1-to-legacy", "[parametrization]")
+{
+	StableNHV1ToLegacy map;
+	Eigen::VectorXd physical(4);
+	physical << 7.3, 4.2, 2.1, 1.7;
+
+	const Eigen::VectorXd legacy = map.eval(physical);
+	REQUIRE(legacy(0) == Catch::Approx(physical(0) + 3.0 * physical(2) / 8.0 - 1e-4));
+	REQUIRE(legacy(1) == Catch::Approx(physical(1) + 3.0 * physical(3) / 8.0 - 1e-4));
+	REQUIRE(legacy(2) == Catch::Approx(3.0 * physical(2) / 4.0));
+	REQUIRE(legacy(3) == Catch::Approx(3.0 * physical(3) / 4.0));
+	REQUIRE((map.inverse_eval(legacy) - physical).norm() < 1e-12);
+	verify_apply_jacobian(map, legacy);
+}
+
 #endif
