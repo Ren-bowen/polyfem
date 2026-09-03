@@ -4,6 +4,7 @@
 
 #include <polyfem/utils/Logger.hpp>
 #include <polyfem/utils/MatrixUtils.hpp>
+#include <polyfem/utils/Timer.hpp>
 #include <polyfem/utils/Types.hpp>
 
 #include <polyfem/time_integrator/BDF.hpp>
@@ -227,7 +228,14 @@ namespace polyfem
 			}
 		}
 
-		Eigen::MatrixXd solve_static_adjoint(const legacy::State &state, const DiffCache &diff_cache, const Eigen::MatrixXd &adjoint_rhs)
+		bool is_quasistatic(const legacy::State &state)
+		{
+			return state.problem->is_time_dependent()
+				   && state.args.contains("time")
+				   && state.args["time"].value("quasistatic", false);
+		}
+
+		Eigen::MatrixXd solve_static_adjoint(const legacy::State &state, const DiffCache &diff_cache, const Eigen::MatrixXd &adjoint_rhs, const int hessian_step = 0)
 		{
 			auto &s = state;
 
@@ -238,7 +246,11 @@ namespace polyfem
 			{
 				b(s.boundary_nodes, Eigen::all).setZero();
 
-				StiffnessMatrix A = diff_cache.gradu_h(0);
+				StiffnessMatrix A;
+				{
+					POLYFEM_SCOPED_TIMER("backward hessian assembly");
+					A = diff_cache.gradu_h(hessian_step);
+				}
 				const int full_size = A.rows();
 				const int problem_dim = s.problem->is_scalar() ? 1 : s.mesh->dimension();
 				int precond_num = problem_dim * s.n_bases;
@@ -260,7 +272,10 @@ namespace polyfem
 				{
 					Eigen::VectorXd x, tmp;
 					tmp = b.col(i);
-					dirichlet_solve_prefactorized(*s.static_linear_solver_cache, A, tmp, boundary_nodes_tmp, x);
+					{
+						POLYFEM_SCOPED_TIMER("backward linear solver");
+						dirichlet_solve_prefactorized(*s.static_linear_solver_cache, A, tmp, boundary_nodes_tmp, x);
+					}
 
 					if (s.has_periodic_bc())
 						adjoint.col(i) = s.periodic_bc->periodic_to_full(full_size, x);
@@ -272,7 +287,12 @@ namespace polyfem
 			{
 				auto solver = polysolve::linear::Solver::create(s.args["solver"]["adjoint_linear"], adjoint_logger());
 
-				StiffnessMatrix A = diff_cache.gradu_h(0); // This should be transposed, but A is symmetric in hyper-elastic and diffusion problems
+				StiffnessMatrix A;
+				{
+					POLYFEM_SCOPED_TIMER("backward hessian assembly");
+					// This should be transposed, but A is symmetric in hyper-elastic and diffusion problems.
+					A = diff_cache.gradu_h(hessian_step);
+				}
 
 				/*
 				For non-periodic problems, the adjoint solution p's size is the full size in NLProblem
@@ -288,7 +308,10 @@ namespace polyfem
 
 						Eigen::VectorXd x;
 						x.setZero(tmp.size());
-						dirichlet_solve(*solver, A, tmp, s.boundary_nodes, x, A.rows(), "", false, false, false);
+						{
+							POLYFEM_SCOPED_TIMER("backward linear solver");
+							dirichlet_solve(*solver, A, tmp, s.boundary_nodes, x, A.rows(), "", false, false, false);
+						}
 
 						adjoint.col(i) = x;
 						adjoint(s.boundary_nodes, i) = -b(s.boundary_nodes, i);
@@ -368,7 +391,10 @@ namespace polyfem
 						break;
 
 					StiffnessMatrix gradu_h_prev;
-					compute_force_jacobian_prev(state, diff_cache, i + j, i, gradu_h_prev);
+					{
+						POLYFEM_SCOPED_TIMER("backward hessian assembly");
+						compute_force_jacobian_prev(state, diff_cache, i + j, i, gradu_h_prev);
+					}
 					Eigen::VectorXd tmp = adjoints.col(i + j) * (time_integrator::BDF::betas(diff_cache.bdf_order(i + j) - 1) * dt);
 					tmp(s.boundary_nodes).setZero();
 					rhs_ += -gradu_h_prev.transpose() * tmp;
@@ -378,17 +404,27 @@ namespace polyfem
 				{
 					double beta_dt = time_integrator::BDF::betas(diff_cache.bdf_order(i) - 1) * dt;
 
-					rhs_ += (1. / beta_dt) * (diff_cache.gradu_h(i) - reduced_mass).transpose() * sum_alpha_p;
+					{
+						POLYFEM_SCOPED_TIMER("backward hessian assembly");
+						rhs_ += (1. / beta_dt) * (diff_cache.gradu_h(i) - reduced_mass).transpose() * sum_alpha_p;
+					}
 
 					{
-						StiffnessMatrix A = diff_cache.gradu_h(i).transpose();
+						StiffnessMatrix A;
+						{
+							POLYFEM_SCOPED_TIMER("backward hessian assembly");
+							A = diff_cache.gradu_h(i).transpose();
+						}
 						Eigen::VectorXd b_ = rhs_;
 						b_(s.boundary_nodes).setZero();
 
 						auto solver = polysolve::linear::Solver::create(s.args["solver"]["adjoint_linear"], adjoint_logger());
 
 						Eigen::VectorXd x;
-						dirichlet_solve(*solver, A, b_, s.boundary_nodes, x, A.rows(), "", false, false, false);
+						{
+							POLYFEM_SCOPED_TIMER("backward linear solver");
+							dirichlet_solve(*solver, A, b_, s.boundary_nodes, x, A.rows(), "", false, false, false);
+						}
 						adjoints.col(i + cols_per_adjoint) = x;
 					}
 
@@ -412,9 +448,43 @@ namespace polyfem
 			return adjoints;
 		}
 
+		// Quasistatic incremental loading is time-dependent for the forward solver,
+		// but each cached step is an independent static equilibrium. The inertial
+		// BDF adjoint reads bdf_order(step), which quasistatic caching leaves at 0,
+		// so betas(-1) produces NaNs. Solve a static adjoint per step instead and
+		// store p in the left half so get_adjoint_mat() stays on the transient layout.
+		Eigen::MatrixXd solve_quasistatic_adjoint(const legacy::State &state, const DiffCache &diff_cache, const Eigen::MatrixXd &adjoint_rhs)
+		{
+			const int time_steps = state.args["time"]["time_steps"];
+			assert(adjoint_rhs.cols() == time_steps + 1);
+
+			const int cols_per_adjoint = time_steps + 1;
+			Eigen::MatrixXd adjoints;
+			adjoints.setZero(state.ndof(), cols_per_adjoint * 2);
+
+			if (!adjoint_rhs.col(0).isZero(0))
+			{
+				log_and_throw_adjoint_error(
+					"Quasistatic adjoint does not support a rest-step (t=0) objective; wrap it in transient_integral.");
+			}
+
+			for (int i = 1; i <= time_steps; ++i)
+			{
+				if (adjoint_rhs.col(i).isZero(0))
+					continue;
+
+				const Eigen::MatrixXd p = solve_static_adjoint(state, diff_cache, adjoint_rhs.col(i), i);
+				adjoints.col(i) = p.col(0);
+			}
+
+			return adjoints;
+		}
+
 		Eigen::MatrixXd solve_adjoint(const legacy::State &state, const DiffCache &diff_cache, const Eigen::MatrixXd &rhs)
 		{
-			if (state.problem->is_time_dependent())
+			if (is_quasistatic(state))
+				return solve_quasistatic_adjoint(state, diff_cache, rhs);
+			else if (state.problem->is_time_dependent())
 				return solve_transient_adjoint(state, diff_cache, rhs);
 			else
 				return solve_static_adjoint(state, diff_cache, rhs);

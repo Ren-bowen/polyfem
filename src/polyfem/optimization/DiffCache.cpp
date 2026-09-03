@@ -266,6 +266,11 @@ namespace polyfem
 		smooth_collision_set_[cur_step] = smooth_collision_set;
 		normal_adhesion_collision_set_[cur_step] = normal_adhesion_set;
 		disp_grad_[cur_step] = disp_grad;
+		// Quasistatic steps have no BDF integrator, but leftover inertial
+		// adjoint code reads bdf_order(step)-1. Keep a valid order so that
+		// path cannot call BDF::betas(-1).
+		if (cur_step < bdf_order_.size())
+			bdf_order_(cur_step) = 1;
 
 		cur_size_++;
 	}

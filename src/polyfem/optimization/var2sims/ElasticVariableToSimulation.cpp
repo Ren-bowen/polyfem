@@ -81,11 +81,36 @@ namespace polyfem::solver
 			auto &state = states_[i];
 			auto &diff_cache = diff_caches_[i];
 
-			if (state->problem->is_time_dependent())
+			const bool quasistatic = state->problem->is_time_dependent()
+									 && state->args.contains("time")
+									 && state->args["time"].value("quasistatic", false);
+
+			if (state->problem->is_time_dependent() && !quasistatic)
 			{
 				Eigen::MatrixXd adjoint_p = get_adjoint_mat(*state, *diff_cache, 0);
 				Eigen::MatrixXd adjoint_nu = get_adjoint_mat(*state, *diff_cache, 1);
 				AdjointTools::dJ_material_transient_adjoint_term(*state, *diff_cache, adjoint_nu, adjoint_p, cur_term);
+			}
+			else if (quasistatic)
+			{
+				// Each quasistatic step is a static equilibrium. Sum p · ∂F/∂λ
+				// over steps; a "final" objective only has a nonzero last-step p.
+				Eigen::MatrixXd adjoint_p = get_adjoint_mat(*state, *diff_cache, 0);
+				cur_term.setZero();
+				for (int t = 0; t < adjoint_p.cols(); ++t)
+				{
+					if (adjoint_p.col(t).isZero(0))
+						continue;
+
+					Eigen::VectorXd step_term;
+					AdjointTools::dJ_material_static_adjoint_term(*state, diff_cache->u(t), adjoint_p.col(t), step_term);
+					if (cur_term.size() != step_term.size())
+						cur_term = step_term;
+					else
+						cur_term += step_term;
+				}
+				if (cur_term.size() == 0)
+					cur_term.setZero(para_out_dof());
 			}
 			else
 			{
