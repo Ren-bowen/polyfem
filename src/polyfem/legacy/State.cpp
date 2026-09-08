@@ -274,6 +274,23 @@ namespace polyfem::legacy
 
 		if (mesh->in_ordered_vertices().size() <= 0 || mesh->in_ordered_edges().size() <= 0 || (mesh->is_volume() && mesh->in_ordered_faces().size() <= 0))
 		{
+			// P1 has only vertex DOFs. Medit imports can lack edge/face
+			// ordering metadata, but vertex BCs can still be mapped using
+			// the basis builder's actual vertex-to-node permutation.
+			const auto &input_vertices = mesh->in_ordered_vertices();
+			const bool identity_input_vertices = input_vertices.size() == mesh->n_vertices()
+				&& (input_vertices.array() == Eigen::VectorXi::LinSpaced(mesh->n_vertices(), 0, mesh->n_vertices() - 1).array()).all();
+			if (disc_orders.maxCoeff() == 1 && n_bases == mesh->n_vertices()
+				&& (input_vertices.size() == 0 || identity_input_vertices))
+			{
+				const auto vertex_to_node = primitive_to_node();
+				in_node_to_node = Eigen::Map<const Eigen::VectorXi>(vertex_to_node.data(), vertex_to_node.size());
+				in_primitive_to_primitive.setLinSpaced(
+					mesh->n_vertices() + mesh->n_edges() + mesh->n_faces() + mesh->n_cells(),
+					0, mesh->n_vertices() + mesh->n_edges() + mesh->n_faces() + mesh->n_cells() - 1);
+				logger().info("P1 input vertex mapping rebuilt from basis nodes ({} vertices)", vertex_to_node.size());
+				return;
+			}
 			logger().warn("Node ordering disabled, input vertices/edges/faces not computed!");
 			return;
 		}
@@ -814,8 +831,13 @@ namespace polyfem::legacy
 			logger().debug("Building node mapping...");
 			timer2.start();
 			build_node_mapping();
-			problem->update_nodes(in_node_to_node);
-			mesh->update_nodes(in_node_to_node);
+			// Some imported meshes have no input ordering metadata. Never
+			// index an empty map while remapping nodal Dirichlet conditions.
+			if (in_node_to_node.size() > 0)
+			{
+				problem->update_nodes(in_node_to_node);
+				mesh->update_nodes(in_node_to_node);
+			}
 			timer2.stop();
 			logger().debug("Done (took {}s)", timer2.getElapsedTime());
 		}

@@ -2,6 +2,22 @@
 
 namespace polyfem::assembler
 {
+	DefGradMatrix<double> StableNeoHookeanElasticity::gradient(
+		const RowVectorNd &p, const double t, const int el_id, const DefGradMatrix<double> &F) const
+	{
+		double lambda, mu;
+		params_.lambda_mu(p, p, t, el_id, lambda, mu);
+		return stable_nhk_stress(F, lambda, mu);
+	}
+
+	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, 0, 9, 9> StableNeoHookeanElasticity::hessian(
+		const RowVectorNd &p, const double t, const int el_id, const DefGradMatrix<double> &F) const
+	{
+		double lambda, mu;
+		params_.lambda_mu(p, p, t, el_id, lambda, mu);
+		return stable_nhk_hessian(F, lambda, mu);
+	}
+
 	void StableNeoHookeanElasticity::add_multimaterial(const int index, const json &params, const Units &units, const std::string &root_path)
 	{
 		if (size() != 3)

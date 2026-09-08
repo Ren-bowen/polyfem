@@ -399,6 +399,50 @@ TEST_CASE("stable_neo_hookean_nhk1_derivatives", "[assembler][stable_neo_hookean
 	REQUIRE((expected_dlambda - finite_dlambda).norm() < 1e-8);
 }
 
+TEST_CASE("stable_neo_hookean_analytic_matches_autodiff", "[assembler][stable_neo_hookean]")
+{
+	using Diff2 = DScalar2<double, Eigen::Matrix<double, Eigen::Dynamic, 1, 0, 9, 1>,
+		Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, 0, 9, 9>>;
+	DiffScalarBase::setVariableCount(9);
+	Eigen::Matrix3d deformed;
+	deformed << 1.1, 0.08, -0.03, 0.02, 0.93, 0.05, -0.04, 0.06, 1.04;
+	std::vector<Eigen::Matrix3d> deformations = {Eigen::Matrix3d::Identity(), deformed};
+	deformed.row(0) *= -1;
+	deformations.push_back(deformed); // Inverted.
+	deformed.row(2) = deformed.row(1);
+	deformations.push_back(deformed); // Rank two, J = 0.
+	deformations.push_back(Eigen::Matrix3d::Zero());
+	for (const double scale : {1.0, 1e6})
+		for (const auto &F : deformations)
+		{
+			CAPTURE(scale, F);
+			const double lambda = 7.3 * scale, mu = 2.1 * scale;
+			DefGradMatrix<Diff2> F_ad(3, 3);
+			for (int i = 0; i < 3; ++i)
+				for (int j = 0; j < 3; ++j)
+					F_ad(i, j) = Diff2(3 * i + j, F(i, j));
+			const Diff2 energy = stable_nhk_energy(F_ad, lambda, mu);
+			const Eigen::Matrix3d P = stable_nhk_stress(F, lambda, mu);
+			const Eigen::Matrix<double, 9, 9> H = stable_nhk_hessian(F, lambda, mu);
+			REQUIRE(H.allFinite());
+			REQUIRE((H - H.transpose()).norm() < 1e-12 * std::max(1.0, H.norm()));
+			REQUIRE((H - energy.getHessian()).norm() < 1e-12 * std::max(1.0, H.norm()));
+			for (int i = 0; i < 3; ++i)
+				for (int j = 0; j < 3; ++j)
+					REQUIRE(P(i, j) == Catch::Approx(energy.getGradient()(3 * i + j)).epsilon(1e-12).margin(1e-12 * scale));
+			for (int k = 0; k < 3; ++k)
+				for (int l = 0; l < 3; ++l)
+				{
+					Eigen::Matrix3d direction = Eigen::Matrix3d::Zero();
+					direction(k, l) = 1;
+					const Eigen::Matrix3d tangent = stable_nhk_stress_tangent(F, direction, lambda, mu);
+					for (int i = 0; i < 3; ++i)
+						for (int j = 0; j < 3; ++j)
+							REQUIRE(H(3 * i + j, 3 * k + l) == Catch::Approx(tangent(i, j)).epsilon(1e-12).margin(1e-12 * scale));
+				}
+		}
+}
+
 TEST_CASE("stable_neo_hookean_generic_assembly", "[assembler][stable_neo_hookean]")
 {
 	const std::string path = POLYFEM_DATA_DIR;
@@ -466,6 +510,28 @@ TEST_CASE("stable_neo_hookean_generic_assembly", "[assembler][stable_neo_hookean
 	REQUIRE((analytic_gradient - finite_gradient).norm() < 1e-5);
 
 	const Eigen::MatrixXd analytic_hessian = hessian(displacement);
+
+	// Keep the previous AD assembly path as an independent regression oracle,
+	// including the mapping from deformation gradients to mesh degrees of freedom.
+	class ADReference : public StableNeoHookeanElasticity
+	{
+	public:
+		ADReference() { autodiff_type_ = AutodiffType::STRESS; }
+	} reference;
+	reference.set_size(3);
+	Units units;
+	units.init(state.args["units"]);
+	reference.add_multimaterial(0, in_args["materials"], units, debug.root_path);
+	Eigen::MatrixXd ad_gradient;
+	reference.assemble_gradient(true, debug.n_bases, *debug.bases, *debug.geometry_bases,
+		ass_vals_cache, 0, 0, displacement, displacement, ad_gradient);
+	utils::SparseMatrixCache ad_mat_cache;
+	StiffnessMatrix ad_hessian;
+	reference.assemble_hessian(true, debug.n_bases, false, *debug.bases, *debug.geometry_bases,
+		ass_vals_cache, 0, 0, displacement, displacement, ad_mat_cache, ad_hessian);
+	REQUIRE((analytic_gradient - ad_gradient).norm() < 1e-12 * std::max(1.0, ad_gradient.norm()));
+	REQUIRE((analytic_hessian - Eigen::MatrixXd(ad_hessian)).norm() < 1e-12 * std::max(1.0, ad_hessian.norm()));
+
 	Eigen::MatrixXd finite_hessian(ndof, ndof);
 	for (int i = 0; i < ndof; ++i)
 	{

@@ -491,11 +491,17 @@ TEST_CASE("stable-neohookean-material-static", "[opt_gradient][stable_neo_hookea
 	json variable_args = {
 		{"type", "elastic"}, {"state", 0},
 		{"composition", {{{"type", "exp"}}, {{"type", "per-body-to-per-elem"}, {"state", 0}}}}};
-	VariableToSimulationGroup var2sim = from_json::build_variable_to_simulation_group(
-		json::array({variable_args}), states, diff_caches, {2});
 	json form_args = {{"type", "position"}, {"state", 0}, {"dim", 1}, {"volume_selection", json::array()}};
-	auto form = from_json::build_form(form_args, var2sim, states, diff_caches);
-	json opt_args = AdjointOptUtils::apply_opt_json_spec(json::object(), false);
+	// The builders expect schema-expanded arguments (e.g. exp's from/to).
+	json opt_args = AdjointOptUtils::apply_opt_json_spec(
+		{{"parameters", json::array()}, {"states", json::array()},
+		 {"variable_to_simulation", json::array({variable_args})},
+		 {"functionals", json::array({form_args})}}, false);
+	VariableToSimulationGroup var2sim = from_json::build_variable_to_simulation_group(
+		opt_args["variable_to_simulation"], states, diff_caches, {2});
+	auto form = from_json::build_form(opt_args["functionals"][0], var2sim, states, diff_caches);
+	// The state is built in memory above; provide its dependency metadata.
+	opt_args["states"] = json::array({{{"initial_guess", -1}}});
 	opt_args["output"]["save_frequency"] = 100000;
 	opt_args["solver"]["advanced"]["solve_in_parallel"] = false;
 	AdjointNLProblem problem{form, var2sim, states, diff_caches, opt_args};

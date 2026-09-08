@@ -438,3 +438,10 @@ endif()
 if(POLYFEM_WITH_APP)
     add_subdirectory(app)
 endif()
+
+# Optional out-of-tree Python bindings, linked to this exact PolyFEM target.
+# Empty by default so normal command-line builds are unchanged.
+set(POLYFEM_PYTHON_BINDINGS_SOURCE_DIR "" CACHE PATH "Optional polyfem-python checkout")
+if(POLYFEM_PYTHON_BINDINGS_SOURCE_DIR)
+    add_subdirectory("${POLYFEM_PYTHON_BINDINGS_SOURCE_DIR}" "python-bindings")
+endif()

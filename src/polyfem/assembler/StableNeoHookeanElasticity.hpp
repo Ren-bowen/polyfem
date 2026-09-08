@@ -107,10 +107,48 @@ namespace polyfem::assembler
 		return length_rate * dF + volume_rate * dJ * C + q * dC;
 	}
 
+	inline Eigen::Matrix<double, 9, 9> stable_nhk_hessian(
+		const DefGradMatrix<double> &F,
+		const double lambda,
+		const double mu)
+	{
+		const double a = stable_nhk_length_rate(mu);
+		const double b = stable_nhk_volume_rate(lambda, mu);
+		const double q = b * (F.determinant() - 1.0) - a;
+		const auto C = stable_nhk_cofactor(F);
+		Eigen::Matrix<double, 9, 1> c;
+		for (int i = 0; i < 3; ++i)
+			for (int j = 0; j < 3; ++j)
+				c(3 * i + j) = C(i, j);
+
+		// Exact NHK1 tangent, as in Unified GIPC's __snk1_exact_hessian:
+		// a I + b vec(cof(F)) vec(cof(F))^T + q Hessian(det(F)).
+		// GenericElastic uses ROW-major vec(F), unlike GIPC's column-major
+		// convention. Differentiate the determinant polynomial, without F^-1,
+		// so singular and inverted deformations remain supported.
+		Eigen::Matrix<double, 9, 9> H = b * c * c.transpose();
+		H.diagonal().array() += a;
+		auto cross_matrix = [](const Eigen::Vector3d &v) -> Eigen::Matrix3d {
+			Eigen::Matrix3d S;
+			S << 0, -v(2), v(1), v(2), 0, -v(0), -v(1), v(0), 0;
+			return S;
+		};
+		const Eigen::Matrix3d H01 = -q * cross_matrix(F.row(2).transpose());
+		const Eigen::Matrix3d H02 = q * cross_matrix(F.row(1).transpose());
+		const Eigen::Matrix3d H12 = -q * cross_matrix(F.row(0).transpose());
+		H.block<3, 3>(0, 3) += H01;
+		H.block<3, 3>(3, 0) += H01.transpose();
+		H.block<3, 3>(0, 6) += H02;
+		H.block<3, 3>(6, 0) += H02.transpose();
+		H.block<3, 3>(3, 6) += H12;
+		H.block<3, 3>(6, 3) += H12.transpose();
+		return H;
+	}
+
 	class StableNeoHookeanElasticity : public GenericElastic<StableNeoHookeanElasticity>
 	{
 	public:
-		StableNeoHookeanElasticity() = default;
+		StableNeoHookeanElasticity() { autodiff_type_ = AutodiffType::NONE; }
 
 		std::string name() const override { return "StableNeoHookean"; }
 		bool allow_inversion() const override { return true; }
@@ -118,6 +156,11 @@ namespace polyfem::assembler
 		void add_multimaterial(const int index, const json &params, const Units &units, const std::string &root_path) override;
 
 		std::map<std::string, ParamFunc> parameters() const override;
+
+		DefGradMatrix<double> gradient(
+			const RowVectorNd &p, double t, int el_id, const DefGradMatrix<double> &F) const override;
+		Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, 0, 9, 9> hessian(
+			const RowVectorNd &p, double t, int el_id, const DefGradMatrix<double> &F) const override;
 
 		void compute_dstress_dmu_dlambda(
 			const OptAssemblerData &data,
