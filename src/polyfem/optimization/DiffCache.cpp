@@ -23,6 +23,7 @@
 
 #include <polyfem/utils/Types.hpp>
 #include <polyfem/utils/Logger.hpp>
+#include <polyfem/utils/Timer.hpp>
 
 #include <ipc/ipc.hpp>
 #include <Eigen/Core>
@@ -327,7 +328,12 @@ namespace polyfem
 		ipc::TangentialCollisions cur_tangential_adhesion_set;
 
 		if (!s.problem->is_time_dependent() || step > 0)
+		{
+			// Unprojected force Jacobian saved for adjoint replay. Counted with
+			// backward Hessian: it is derivative-cache work, not Newton assembly.
+			POLYFEM_SCOPED_TIMER("hessian cache");
 			compute_force_jacobian(s, sol, disp_grad_final, gradu_h);
+		}
 
 		if (s.solve_data.contact_form)
 		{
