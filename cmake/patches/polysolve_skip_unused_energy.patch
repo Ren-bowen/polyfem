@@ -1,0 +1,75 @@
+diff --git a/src/polysolve/nonlinear/Solver.cpp b/src/polysolve/nonlinear/Solver.cpp
+--- a/src/polysolve/nonlinear/Solver.cpp
++++ b/src/polysolve/nonlinear/Solver.cpp
+@@ -277,11 +277,19 @@
+         StopWatch stop_watch("nonlinear solver", total_time, m_logger);
+         stop_watch.start();
+ 
++        // Merit-function evaluations are only required for Δf stopping.
++        // x_delta-only Newton still needs ∇f for HΔx=-g; line search evaluates
++        // f(x) on its own. Skip the unused assemblies here.
++        const bool need_energy = m_stop_rescaled.fDelta > 0;
++        double energy = NaN;
++        if (need_energy)
++            energy = objFunc(x);
++
+         m_logger.debug(
+             "Starting {} with {} solve {}={:g} (stopping criteria: {})",
+-            descent_strategy_name(), m_line_search->name(), log::f0(), objFunc(x), m_stop_rescaled.print_message());
++            descent_strategy_name(), m_line_search->name(), log::f0(), energy, m_stop_rescaled.print_message());
+ 
+-        update_solver_info(objFunc(x));
++        update_solver_info(energy);
+         objFunc.post_step(PostStepData(m_current.iterations, solver_info, x, grad));
+ 
+         double initial_grad_norm;
+@@ -293,27 +301,31 @@
+ 
+             // --- Energy ------------------------------------------------------
+ 
+-            double energy;
++            if (need_energy)
+             {
+                 POLYSOLVE_SCOPED_STOPWATCH("compute objective function", obj_fun_time, m_logger);
+                 energy = objFunc(x);
++                if (!std::isfinite(energy))
++                {
++                    m_status = Status::NanEncountered;
++                    log_and_throw_error(m_logger, "[{}][{}] f(x) is nan or inf; stopping", descent_strategy_name(), m_line_search->name());
++                    break;
++                }
++                m_current.fDelta = std::abs(old_energy - energy);
+             }
+-
+-            if (!std::isfinite(energy))
++            else
+             {
+-                m_status = Status::NanEncountered;
+-                log_and_throw_error(m_logger, "[{}][{}] f(x) is nan or inf; stopping", descent_strategy_name(), m_line_search->name());
+-                break;
++                energy = NaN;
++                m_current.fDelta = 0;
+             }
+ 
+-            m_current.fDelta = std::abs(old_energy - energy);
+-
+             // --- Gradient ----------------------------------------------------
+             {
+                 POLYSOLVE_SCOPED_STOPWATCH("compute gradient", grad_time, m_logger);
+                 objFunc.gradient(x, grad);
+             }
+ 
++            if (gradient_fd_strategy != FiniteDiffStrategy::NONE)
+             {
+                 POLYSOLVE_SCOPED_STOPWATCH("verify gradient", grad_time, m_logger);
+                 verify_gradient(objFunc, x, grad);
+@@ -632,6 +644,9 @@
+ 
+     void Solver::verify_gradient(Problem &objFunc, const TVector &x, const TVector &grad)
+     {
++        if (gradient_fd_strategy == FiniteDiffStrategy::NONE)
++            return;
++
+         bool match = false;
+         double J = objFunc(x);
+ 
