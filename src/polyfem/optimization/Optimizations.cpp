@@ -67,6 +67,10 @@ namespace polyfem::solver
 
 	std::shared_ptr<polysolve::nonlinear::Solver> AdjointOptUtils::make_nl_solver(const json &solver_params, const json &linear_solver_params, const double characteristic_length)
 	{
+		// An explicit strategy list must remain explicit: a single L-BFGS
+		// entry disables PolySolve's implicit GradientDescent fallback.
+		if (solver_params["solver"].is_array())
+			return polysolve::nonlinear::Solver::create(solver_params, linear_solver_params, characteristic_length, adjoint_logger());
 		auto names = polysolve::nonlinear::Solver::available_solvers();
 		if (std::find(names.begin(), names.end(), solver_params["solver"]) != names.end())
 			return polysolve::nonlinear::Solver::create(solver_params, linear_solver_params, characteristic_length, adjoint_logger());

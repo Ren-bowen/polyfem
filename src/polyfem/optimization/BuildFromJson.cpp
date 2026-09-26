@@ -224,6 +224,17 @@ namespace polyfem::from_json
 				log_and_throw_adjoint_error("Incorrect spec for SliceMap!");
 			}
 		}
+		else if (type == "clamp")
+		{
+			if (args["lower"].is_array() && args["upper"].is_array())
+			{
+				const auto lo = args["lower"].get<std::vector<double>>();
+				const auto hi = args["upper"].get<std::vector<double>>();
+				map = std::make_shared<ClampMap>(Eigen::Map<const Eigen::VectorXd>(lo.data(), lo.size()), Eigen::Map<const Eigen::VectorXd>(hi.data(), hi.size()));
+			}
+			else
+				map = std::make_shared<ClampMap>(args["lower"].get<double>(), args["upper"].get<double>());
+		}
 		else if (type == "exp")
 		{
 			map = std::make_shared<ExponentialMap>(args["from"], args["to"]);

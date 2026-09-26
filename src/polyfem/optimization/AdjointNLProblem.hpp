@@ -56,6 +56,8 @@ namespace polyfem::solver
 
 		void solution_changed(const Eigen::VectorXd &new_x) override;
 		bool after_line_search_custom_operation(const Eigen::VectorXd &x0, const Eigen::VectorXd &x1) override;
+		bool clip_before_line_search() const override { return parameter_clip_.value("before_line_search", false); }
+		bool clip_update(const Eigen::VectorXd &x0, Eigen::VectorXd &x1) override;
 		void solve_pde();
 
 	private:
@@ -70,6 +72,7 @@ namespace polyfem::solver
 		int save_freq;
 		std::ofstream solution_ostream;
 
+		json parameter_clip_;
 		bool enable_slim;
 		bool smooth_line_search;
 

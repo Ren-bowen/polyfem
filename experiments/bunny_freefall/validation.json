@@ -1,0 +1,15 @@
+{
+  "steps": 200,
+  "saved_states": 201,
+  "dt": 0.01,
+  "duration": 2.0,
+  "initial_bunny_min_y": 0.699254,
+  "final_bunny_min_y": 0.15058774012727227,
+  "minimum_bunny_y": 0.1501803655422541,
+  "ground_top_y": 0.15,
+  "max_ground_displacement": 0.0,
+  "first_step_mean_y_displacement": -0.0009809999999999528,
+  "minimum_element_J_all_frames": 0.509004269747587,
+  "all_elements_positive_J": true,
+  "all_volume_frames_finite": true
+}

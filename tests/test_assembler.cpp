@@ -544,3 +544,53 @@ TEST_CASE("stable_neo_hookean_generic_assembly", "[assembler][stable_neo_hookean
 	REQUIRE((analytic_hessian - analytic_hessian.transpose()).norm() < 1e-10);
 	REQUIRE((analytic_hessian - finite_hessian).norm() < 1e-4 * std::max(1.0, analytic_hessian.norm()));
 }
+
+TEST_CASE("stable_neo_hookean_shape_derivative_analytic", "[assembler][stable_neo_hookean]")
+{
+	const double lambda = 7.3;
+	const double mu = 2.1;
+	StableNeoHookeanElasticity assembler;
+	assembler.set_size(3);
+	Units units;
+	assembler.add_multimaterial(0, {{"type", "StableNeoHookean"}, {"lambda", lambda}, {"mu", mu}}, units, "");
+
+	Eigen::Matrix3d F;
+	F << 1.1, 0.08, -0.03,
+		0.02, 0.93, 0.05,
+		-0.04, 0.06, 1.04;
+	const Eigen::MatrixXd grad_u = F - Eigen::Matrix3d::Identity();
+	const Eigen::MatrixXd local_pts = Eigen::MatrixXd::Zero(1, 3);
+	const Eigen::MatrixXd global_pts = local_pts;
+	const OptAssemblerData data(0, 0, 0, local_pts, global_pts, grad_u);
+
+	Eigen::Matrix3d mat;
+	mat << 0.12, -0.07, 0.03,
+		0.05, 0.09, -0.04,
+		-0.02, 0.06, 0.11;
+
+	Eigen::MatrixXd stress, tangent;
+	assembler.compute_stress_grad_multiply_mat(data, mat, stress, tangent);
+	REQUIRE((stress - stable_nhk_stress(F, lambda, mu)).norm() < 1e-12);
+	REQUIRE((tangent - stable_nhk_stress_tangent(F, mat, lambda, mu)).norm() < 1e-12);
+
+	Eigen::MatrixXd stress2, tangent2;
+	assembler.compute_stress_grad_multiply_stress(data, stress2, tangent2);
+	REQUIRE((stress2 - stress).norm() < 1e-12);
+	REQUIRE((tangent2 - stable_nhk_stress_tangent(F, stress2, lambda, mu)).norm() < 1e-12);
+
+	const Eigen::Vector3d vect(0.2, -0.1, 0.3);
+	Eigen::MatrixXd stress3, tangent_vect;
+	assembler.compute_stress_grad_multiply_vect(data, vect, stress3, tangent_vect);
+	Eigen::MatrixXd expected(9, 3);
+	for (int k = 0; k < 3; ++k)
+	{
+		Eigen::Matrix3d dF = Eigen::Matrix3d::Zero();
+		dF.row(k) = vect.transpose();
+		const Eigen::MatrixXd dS = stable_nhk_stress_tangent(F, dF, lambda, mu);
+		for (int i = 0; i < 3; ++i)
+			for (int j = 0; j < 3; ++j)
+				expected(i * 3 + j, k) = dS(i, j);
+	}
+	REQUIRE((stress3 - stress).norm() < 1e-12);
+	REQUIRE((tangent_vect - expected).norm() < 1e-12);
+}

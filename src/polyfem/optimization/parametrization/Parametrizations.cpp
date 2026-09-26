@@ -7,6 +7,7 @@
 #include <polyfem/utils/ElasticityUtils.hpp>
 
 #include <string_view>
+#include <cmath>
 
 namespace polyfem::solver
 {
@@ -34,6 +35,39 @@ namespace polyfem::solver
 		}
 
 	} // namespace
+
+	ClampMap::ClampMap(double lower, double upper)
+		: ClampMap(Eigen::VectorXd::Constant(1, lower), Eigen::VectorXd::Constant(1, upper)) {}
+
+	ClampMap::ClampMap(const Eigen::VectorXd &lower, const Eigen::VectorXd &upper) : lower_(lower), upper_(upper)
+	{
+		if (lower.size() == 0 || lower.size() != upper.size() || !lower.allFinite() || !upper.allFinite() || (lower.array() > upper.array()).any())
+			log_and_throw_adjoint_error("clamp requires finite lower <= upper with matching sizes");
+	}
+
+	Eigen::VectorXd ClampMap::bounds(const Eigen::VectorXd &v, int size) const
+	{
+		if (v.size() == 1) return Eigen::VectorXd::Constant(size, v[0]);
+		if (v.size() != size) log_and_throw_adjoint_error("clamp bound dimension mismatch");
+		return v;
+	}
+
+	Eigen::VectorXd ClampMap::eval(const Eigen::VectorXd &x) const
+	{
+		return x.cwiseMax(bounds(lower_, x.size())).cwiseMin(bounds(upper_, x.size()));
+	}
+
+	Eigen::VectorXd ClampMap::inverse_eval(const Eigen::VectorXd &y) const
+	{
+		if (!y.allFinite() || (y.array() != eval(y).array()).any())
+			log_and_throw_adjoint_error("clamp inverse requires values inside its bounds");
+		return y;
+	}
+
+	Eigen::VectorXd ClampMap::apply_jacobian(const Eigen::VectorXd &grad, const Eigen::VectorXd &x) const
+	{
+		return ((x.array() >= bounds(lower_, x.size()).array()) && (x.array() <= bounds(upper_, x.size()).array())).select(grad.array(), 0.0);
+	}
 
 	ExponentialMap::ExponentialMap(const int from, const int to)
 		: from_(from), to_(to)

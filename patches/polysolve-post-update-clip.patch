@@ -1,0 +1,53 @@
+--- a/src/polysolve/nonlinear/Problem.hpp
++++ b/src/polysolve/nonlinear/Problem.hpp
+@@ -98,6 +98,10 @@
+         /// @param new_x New solution.
+         virtual void solution_changed(const TVector &new_x) {}
+ 
++        virtual bool clip_before_line_search() const { return false; }
++
++        virtual bool clip_update(const TVector &x0, TVector &x1) { return false; }
++
+         virtual bool after_line_search_custom_operation(const TVector &x0, const TVector &x1) { return false; }
+ 
+         /// @brief Callback function used to determine if the solver should stop.
+--- a/src/polysolve/nonlinear/Solver.cpp
++++ b/src/polysolve/nonlinear/Solver.cpp
+@@ -468,6 +468,15 @@
+                 descent_strategy_name(), m_line_search->name(),
+                 m_current.iterations, energy, log::norm(log::grad("f")), m_current.gradNorm);
+ 
++            // Clip the full update once; backtracking scales this bounded direction.
++            if (objFunc.clip_before_line_search())
++            {
++                const double initial_rate = m_line_search->initial_step_size();
++                TVector bounded = x + initial_rate * delta_x;
++                objFunc.clip_update(x, bounded);
++                delta_x = (bounded - x) / initial_rate;
++            }
++
+             // Perform a line_search to compute step scale
+             double rate;
+             {
+@@ -494,7 +503,9 @@
+ 
+             {
+                 TVector x1 = x + rate * delta_x;
+-                if (objFunc.after_line_search_custom_operation(x, x1))
++                const bool clipped = !objFunc.clip_before_line_search() && objFunc.clip_update(x, x1);
++                const bool changed = objFunc.after_line_search_custom_operation(x, x1);
++                if (clipped || changed)
+                     objFunc.solution_changed(x1);
+                 x = x1;
+             }
+--- a/src/polysolve/nonlinear/line_search/LineSearch.hpp
++++ b/src/polysolve/nonlinear/line_search/LineSearch.hpp
+@@ -64,6 +64,8 @@
+         {
+             return is_final_strategy ? max_step_size_iter_final : max_step_size_iter;
+         }
++
++        double initial_step_size() const { return default_init_step_size; }
+ 
+         int iterations() const { return cur_iter; }
+ 

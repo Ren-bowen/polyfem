@@ -15,6 +15,23 @@ namespace polyfem::basis
 
 namespace polyfem::solver
 {
+	/// Componentwise hard clamp; boundary derivatives match torch.clamp.
+	class ClampMap : public Parametrization
+	{
+	public:
+		ClampMap(double lower, double upper);
+		ClampMap(const Eigen::VectorXd &lower, const Eigen::VectorXd &upper);
+		int inverse_size(int y_size) const override { return y_size; }
+		int size(int x_size) const override { return x_size; }
+		Eigen::VectorXd inverse_eval(const Eigen::VectorXd &y) const override;
+		Eigen::VectorXd eval(const Eigen::VectorXd &x) const override;
+		Eigen::VectorXd apply_jacobian(const Eigen::VectorXd &grad, const Eigen::VectorXd &x) const override;
+
+	private:
+		Eigen::VectorXd bounds(const Eigen::VectorXd &v, int size) const;
+		const Eigen::VectorXd lower_, upper_;
+	};
+
 	class ExponentialMap : public Parametrization
 	{
 	public:

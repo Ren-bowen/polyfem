@@ -162,6 +162,23 @@ namespace polyfem::assembler
 		Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, 0, 9, 9> hessian(
 			const RowVectorNd &p, double t, int el_id, const DefGradMatrix<double> &F) const override;
 
+		void compute_stress_grad_multiply_mat(
+			const OptAssemblerData &data,
+			const Eigen::MatrixXd &mat,
+			Eigen::MatrixXd &stress,
+			Eigen::MatrixXd &result) const override;
+
+		void compute_stress_grad_multiply_stress(
+			const OptAssemblerData &data,
+			Eigen::MatrixXd &stress,
+			Eigen::MatrixXd &result) const override;
+
+		void compute_stress_grad_multiply_vect(
+			const OptAssemblerData &data,
+			const Eigen::MatrixXd &vect,
+			Eigen::MatrixXd &stress,
+			Eigen::MatrixXd &result) const override;
+
 		void compute_dstress_dmu_dlambda(
 			const OptAssemblerData &data,
 			Eigen::MatrixXd &dstress_dmu,

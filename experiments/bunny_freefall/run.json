@@ -1,0 +1,113 @@
+{
+  "geometry": [
+    {
+      "mesh": "flat-pool.msh",
+      "volume_selection": 1,
+      "surface_selection": 1
+    },
+    {
+      "mesh": "stanford-bunny.obj_.msh",
+      "transformation": {
+        "translation": [
+          0,
+          0.5,
+          0
+        ],
+        "scale": 6
+      },
+      "volume_selection": 2,
+      "surface_selection": 2
+    }
+  ],
+  "space": {
+    "discr_order": 1,
+    "advanced": {
+      "quadrature_order": 5
+    }
+  },
+  "time": {
+    "t0": 0,
+    "tend": 2,
+    "dt": 0.01,
+    "integrator": "BDF1"
+  },
+  "contact": {
+    "enabled": true,
+    "dhat": 0.001,
+    "friction_coefficient": 0,
+    "use_convergent_formulation": true
+  },
+  "solver": {
+    "linear": {
+      "solver": [
+        "Eigen::PardisoLDLT",
+        "Eigen::AccelerateLDLT",
+        "Eigen::SimplicialLDLT"
+      ]
+    },
+    "nonlinear": {
+      "grad_norm": 1e-06,
+      "line_search": {
+        "use_grad_norm_tol": 0.0001,
+        "method": "Backtracking"
+      }
+    },
+    "contact": {
+      "barrier_stiffness": 100000.0
+    }
+  },
+  "boundary_conditions": {
+    "rhs": [
+      0,
+      9.81,
+      0
+    ],
+    "dirichlet_boundary": [
+      {
+        "id": 1,
+        "value": [
+          0,
+          0,
+          0
+        ]
+      }
+    ]
+  },
+  "initial_conditions": {
+    "velocity": [
+      {
+        "id": 2,
+        "value": [
+          0,
+          0,
+          0
+        ]
+      }
+    ]
+  },
+  "materials": {
+    "type": "NeoHookean",
+    "E": 10000.0,
+    "nu": 0.49,
+    "rho": 1240
+  },
+  "output": {
+    "log": {
+      "level": "info"
+    },
+    "directory": "/home/bowen/polyfem/experiments/bunny_freefall/result",
+    "paraview": {
+      "file_name": "sim.pvd",
+      "high_order_mesh": false,
+      "surface": true,
+      "vismesh_rel_area": 1,
+      "options": {
+        "velocity": true,
+        "body_ids": true
+      }
+    },
+    "advanced": {
+      "save_time_sequence": true
+    }
+  }
+}

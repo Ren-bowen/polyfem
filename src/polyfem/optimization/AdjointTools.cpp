@@ -580,6 +580,7 @@ namespace polyfem::solver
 		const Eigen::MatrixXd &adjoint,
 		Eigen::VectorXd &one_form)
 	{
+		POLYFEM_SCOPED_TIMER("backward hessian assembly");
 		Eigen::VectorXd elasticity_term, rhs_term, pressure_term, contact_term, adhesion_term;
 
 		one_form.setZero(state.n_geom_bases * state.mesh->dimension());
@@ -640,6 +641,7 @@ namespace polyfem::solver
 		const Eigen::MatrixXd &adjoint,
 		Eigen::VectorXd &one_form)
 	{
+		POLYFEM_SCOPED_TIMER("backward hessian assembly");
 		Eigen::VectorXd elasticity_term, contact_term, adhesion_term;
 
 		std::shared_ptr<NLHomoProblem> homo_problem = std::dynamic_pointer_cast<NLHomoProblem>(state.solve_data.nl_problem);
@@ -711,6 +713,7 @@ namespace polyfem::solver
 
 		dJ_shape_homogenization_adjoint_term(state, diff_cache, sol, adjoint, one_form);
 
+		POLYFEM_SCOPED_TIMER("backward hessian assembly");
 		StiffnessMatrix hessian;
 		homo_problem->set_project_to_psd(false);
 		homo_problem->FullNLProblem::hessian(sol, hessian);
@@ -741,6 +744,8 @@ namespace polyfem::solver
 		const int time_steps = state.args["time"]["time_steps"];
 		const int bdf_order = get_bdf_order(state);
 
+		POLYFEM_SCOPED_TIMER("backward hessian assembly");
+
 		Eigen::VectorXd elasticity_term, rhs_term, pressure_term, damping_term, mass_term, contact_term, friction_term, adhesion_term, tangential_adhesion_term;
 		one_form.setZero(state.n_geom_bases * state.mesh->dimension());
 
@@ -760,19 +765,35 @@ namespace polyfem::solver
 			cur_nu(state.boundary_nodes).setZero();
 
 			{
-				InertiaForceDerivative::force_shape_derivative(*state.solve_data.inertia_form, state.mesh->is_volume(), state.n_geom_bases, t, state.bases, state.geom_bases(), *(state.mass_matrix_assembler), state.mass_ass_vals_cache, velocity, cur_nu, mass_term);
-				ElasticForceDerivative::force_shape_derivative(*state.solve_data.elastic_form, t, state.n_geom_bases, diff_cache.u(i), diff_cache.u(i), cur_p, elasticity_term);
-				BodyForceDerivative::force_shape_derivative(*state.solve_data.body_form, state.n_geom_bases, t, diff_cache.u(i - 1), cur_p, rhs_term);
-				PressureForceDerivative::force_shape_derivative(*state.solve_data.pressure_form, state.n_geom_bases, t, diff_cache.u(i), cur_p, pressure_term);
-				pressure_term = diff_cache.basis_nodes_to_gbasis_nodes() * pressure_term;
+				{
+					POLYFEM_SCOPED_TIMER("shape derivative inertia");
+					InertiaForceDerivative::force_shape_derivative(*state.solve_data.inertia_form, state.mesh->is_volume(), state.n_geom_bases, t, state.bases, state.geom_bases(), *(state.mass_matrix_assembler), state.mass_ass_vals_cache, velocity, cur_nu, mass_term);
+				}
+				{
+					POLYFEM_SCOPED_TIMER("shape derivative elastic");
+					ElasticForceDerivative::force_shape_derivative(*state.solve_data.elastic_form, t, state.n_geom_bases, diff_cache.u(i), diff_cache.u(i), cur_p, elasticity_term);
+				}
+				{
+					POLYFEM_SCOPED_TIMER("shape derivative body");
+					BodyForceDerivative::force_shape_derivative(*state.solve_data.body_form, state.n_geom_bases, t, diff_cache.u(i - 1), cur_p, rhs_term);
+				}
+				{
+					POLYFEM_SCOPED_TIMER("shape derivative pressure");
+					PressureForceDerivative::force_shape_derivative(*state.solve_data.pressure_form, state.n_geom_bases, t, diff_cache.u(i), cur_p, pressure_term);
+					pressure_term = diff_cache.basis_nodes_to_gbasis_nodes() * pressure_term;
+				}
 
 				if (state.solve_data.damping_form)
+				{
+					POLYFEM_SCOPED_TIMER("shape derivative damping");
 					ElasticForceDerivative::force_shape_derivative(*state.solve_data.damping_form, t, state.n_geom_bases, diff_cache.u(i), diff_cache.u(i - 1), cur_p, damping_term);
+				}
 				else
 					damping_term.setZero(mass_term.size());
 
 				if (state.is_contact_enabled())
 				{
+					POLYFEM_SCOPED_TIMER("shape derivative contact");
 					if (const auto barrier_contact = dynamic_cast<const BarrierContactForm *>(state.solve_data.contact_form.get()))
 					{
 						BarrierContactForceDerivative::force_shape_derivative(*barrier_contact, diff_cache.collision_set(i), diff_cache.u(i), cur_p, contact_term);
@@ -789,6 +810,7 @@ namespace polyfem::solver
 
 				if (state.solve_data.friction_form)
 				{
+					POLYFEM_SCOPED_TIMER("shape derivative friction");
 					FrictionForceDerivative::force_shape_derivative(*state.solve_data.friction_form, diff_cache.u(i - 1), diff_cache.u(i), cur_p, diff_cache.friction_collision_set(i), friction_term);
 					friction_term = diff_cache.basis_nodes_to_gbasis_nodes() * (friction_term / beta);
 					// friction_term /= beta_dt * beta_dt;
@@ -798,6 +820,7 @@ namespace polyfem::solver
 
 				if (state.is_adhesion_enabled())
 				{
+					POLYFEM_SCOPED_TIMER("shape derivative adhesion");
 					NormalAdhesionForceDerivative::force_shape_derivative(*state.solve_data.normal_adhesion_form, diff_cache.normal_adhesion_collision_set(i), diff_cache.u(i), cur_p, adhesion_term);
 					adhesion_term = diff_cache.basis_nodes_to_gbasis_nodes() * adhesion_term;
 				}
@@ -808,6 +831,7 @@ namespace polyfem::solver
 
 				if (state.solve_data.tangential_adhesion_form)
 				{
+					POLYFEM_SCOPED_TIMER("shape derivative tangential adhesion");
 					TangentialAdhesionForceDerivative::force_shape_derivative(*state.solve_data.tangential_adhesion_form, diff_cache.u(i - 1), diff_cache.u(i), cur_p, diff_cache.tangential_adhesion_collision_set(i), tangential_adhesion_term);
 					tangential_adhesion_term = diff_cache.basis_nodes_to_gbasis_nodes() * (tangential_adhesion_term / beta);
 					// friction_term /= beta_dt * beta_dt;
@@ -831,11 +855,17 @@ namespace polyfem::solver
 			}
 		}
 		sum_alpha_p(state.boundary_nodes).setZero();
-		InertiaForceDerivative::force_shape_derivative(*state.solve_data.inertia_form, state.mesh->is_volume(), state.n_geom_bases, t0, state.bases, state.geom_bases(), *(state.mass_matrix_assembler), state.mass_ass_vals_cache, diff_cache.v(0), sum_alpha_p, mass_term);
+		{
+			POLYFEM_SCOPED_TIMER("shape derivative inertia");
+			InertiaForceDerivative::force_shape_derivative(*state.solve_data.inertia_form, state.mesh->is_volume(), state.n_geom_bases, t0, state.bases, state.geom_bases(), *(state.mass_matrix_assembler), state.mass_ass_vals_cache, diff_cache.v(0), sum_alpha_p, mass_term);
+		}
 
 		one_form += mass_term;
 
-		one_form = utils::flatten(utils::unflatten(one_form, state.mesh->dimension())(state.primitive_to_node(), Eigen::all));
+		{
+			POLYFEM_SCOPED_TIMER("shape derivative remap");
+			one_form = utils::flatten(utils::unflatten(one_form, state.mesh->dimension())(state.primitive_to_node(), Eigen::all));
+		}
 	}
 
 	void AdjointTools::dJ_material_static_adjoint_term(
@@ -844,6 +874,7 @@ namespace polyfem::solver
 		const Eigen::MatrixXd &adjoint,
 		Eigen::VectorXd &one_form)
 	{
+		POLYFEM_SCOPED_TIMER("backward hessian assembly");
 		Eigen::MatrixXd adjoint_zeroed = adjoint;
 		adjoint_zeroed(state.boundary_nodes, Eigen::all).setZero();
 		ElasticForceDerivative::force_material_derivative(*state.solve_data.elastic_form, 0, sol, sol, adjoint_zeroed, one_form);
@@ -856,6 +887,7 @@ namespace polyfem::solver
 		const Eigen::MatrixXd &adjoint_p,
 		Eigen::VectorXd &one_form)
 	{
+		POLYFEM_SCOPED_TIMER("backward hessian assembly");
 		const double t0 = state.args["time"]["t0"];
 		const double dt = state.args["time"]["dt"];
 		const int time_steps = state.args["time"]["time_steps"];
@@ -893,6 +925,7 @@ namespace polyfem::solver
 		const Eigen::MatrixXd &adjoint_p,
 		Eigen::VectorXd &one_form)
 	{
+		POLYFEM_SCOPED_TIMER("backward hessian assembly");
 		const double dt = state.args["time"]["dt"];
 		const double mu = state.solve_data.friction_form->mu();
 		const int time_steps = state.args["time"]["time_steps"];
@@ -959,6 +992,7 @@ namespace polyfem::solver
 		const Eigen::MatrixXd &adjoint_p,
 		Eigen::VectorXd &one_form)
 	{
+		POLYFEM_SCOPED_TIMER("backward hessian assembly");
 		const double t0 = state.args["time"]["t0"];
 		const double dt = state.args["time"]["dt"];
 		const int time_steps = state.args["time"]["time_steps"];
@@ -995,6 +1029,7 @@ namespace polyfem::solver
 		const Eigen::MatrixXd &adjoint_p,
 		Eigen::VectorXd &one_form)
 	{
+		POLYFEM_SCOPED_TIMER("backward hessian assembly");
 		const int ndof = state.ndof();
 		one_form.setZero(ndof * 2); // half for initial solution, half for initial velocity
 
@@ -1015,6 +1050,7 @@ namespace polyfem::solver
 		const Eigen::MatrixXd &adjoint,
 		Eigen::VectorXd &one_form)
 	{
+		POLYFEM_SCOPED_TIMER("backward hessian assembly");
 		const int n_dirichlet_dof = state.boundary_nodes.size();
 		StiffnessMatrix gradd_h = diff_cache.gradu_h(0);
 		std::set<int> boundary_nodes_set(state.boundary_nodes.begin(), state.boundary_nodes.end());
@@ -1037,6 +1073,7 @@ namespace polyfem::solver
 		const Eigen::MatrixXd &adjoint_p,
 		Eigen::VectorXd &one_form)
 	{
+		POLYFEM_SCOPED_TIMER("backward hessian assembly");
 		const double dt = state.args["time"]["dt"];
 		const int time_steps = state.args["time"]["time_steps"];
 		const int bdf_order = get_bdf_order(state);
@@ -1061,6 +1098,7 @@ namespace polyfem::solver
 		const Eigen::MatrixXd &adjoint,
 		Eigen::VectorXd &one_form)
 	{
+		POLYFEM_SCOPED_TIMER("backward hessian assembly");
 		const int n_pressure_dof = boundary_ids.size();
 
 		one_form.setZero(n_pressure_dof);
@@ -1086,6 +1124,7 @@ namespace polyfem::solver
 		const Eigen::MatrixXd &adjoint_p,
 		Eigen::VectorXd &one_form)
 	{
+		POLYFEM_SCOPED_TIMER("backward hessian assembly");
 		const double t0 = state.args["time"]["t0"];
 		const double dt = state.args["time"]["dt"];
 		const int time_steps = state.args["time"]["time_steps"];

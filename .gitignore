@@ -90,3 +90,18 @@ scripts/*.json
 diff-data/
 pref-data/
 polyspline-data/
+
+# Local bunny freefall comparison: retain scripts, JSON inputs, and meshes.
+/.polyscope.ini
+/imgui.ini
+/experiments/bunny_freefall/.polyscope.ini
+/experiments/bunny_freefall/imgui.ini
+/experiments/bunny_freefall/result/
+/experiments/bunny_freefall/archive_height_0/
+/experiments/bunny_freefall/modern_attempt_result/
+/experiments/bunny_freefall/nonconvergent_attempt_result/
+/experiments/bunny_freefall/*.log
+/experiments/bunny_freefall/frame_*.png
+/experiments/bunny_freefall/trajectory.npz
+!/experiments/bunny_freefall/flat-pool.msh
+!/experiments/bunny_freefall/stanford-bunny.obj_.msh

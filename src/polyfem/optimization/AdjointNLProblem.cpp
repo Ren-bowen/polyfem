@@ -132,6 +132,7 @@ namespace polyfem::solver
 		  smooth_line_search(args["solver"]["advanced"]["smooth_line_search"]),
 		  solve_in_parallel(args["solver"]["advanced"]["solve_in_parallel"])
 	{
+		parameter_clip_ = args.value("parameter_clip", json::object());
 		cur_grad.setZero(0);
 
 		if (enable_slim && args["solver"]["nonlinear"]["advanced"]["apply_gradient_fd"] != "None")
@@ -389,6 +390,27 @@ namespace polyfem::solver
 		form_->solution_changed(newX);
 
 		curr_x = newX;
+	}
+
+	bool AdjointNLProblem::clip_update(const Eigen::VectorXd &x0, Eigen::VectorXd &x1)
+	{
+		if (parameter_clip_.empty())
+			return false;
+		const auto lower = parameter_clip_.at("lower").get<std::vector<double>>();
+		const auto upper = parameter_clip_.at("upper").get<std::vector<double>>();
+		const double change = parameter_clip_.at("max_change").get<double>();
+		if (lower.size() != x0.size() || upper.size() != x0.size() || !(change > 0))
+			throw std::runtime_error("Invalid parameter_clip dimensions or max_change");
+		bool changed = false;
+		for (int i = 0; i < x1.size(); ++i)
+		{
+			if (!(lower[i] <= upper[i]) || x0[i] < lower[i] || x0[i] > upper[i])
+				throw std::runtime_error("parameter_clip requires a feasible initial parameter");
+			const double value = std::min(std::max(x1[i], std::max(lower[i], x0[i] - change)), std::min(upper[i], x0[i] + change));
+			changed |= value != x1[i];
+			x1[i] = value;
+		}
+		return changed;
 	}
 
 	bool AdjointNLProblem::after_line_search_custom_operation(const Eigen::VectorXd &x0, const Eigen::VectorXd &x1)
